@@ -549,6 +549,19 @@ export function flowScrollTarget(node, viewport, resetTop = false) {
   return { left, top };
 }
 
+export function flowEdgePath(edge, from, to, layout) {
+  const fromX = from.x + layout.nodeWidth / 2;
+  const fromY = from.y + layout.nodeHeight;
+  const toX = to.x + layout.nodeWidth / 2;
+  const toY = to.y;
+  if (edge.fallthrough) {
+    const railX = layout.width - 24;
+    return `M ${fromX} ${fromY} C ${railX} ${fromY + 30}, ${railX} ${toY - 30}, ${toX} ${toY}`;
+  }
+  const bend = Math.max(30, (toY - fromY) * .5);
+  return `M ${fromX} ${fromY} C ${fromX} ${fromY + bend}, ${toX} ${toY - bend}, ${toX} ${toY}`;
+}
+
 export function layoutASTFlowGraph(nodes, edges, minimumWidth = 720, minimumHeight = 460) {
   const nodeWidth = 196;
   const nodeHeight = 94;

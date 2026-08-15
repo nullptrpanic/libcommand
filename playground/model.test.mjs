@@ -503,6 +503,21 @@ test("flowScrollTarget centers horizontally and follows vertically without cente
   });
 });
 
+test("flowEdgePath routes fallthrough edges around intervening node columns", () => {
+  const layout = { nodeWidth: 196, nodeHeight: 94, width: 792 };
+  const from = { x: 298, y: 178 };
+  const to = { x: 298, y: 454 };
+
+  assert.equal(
+    playgroundModel.flowEdgePath?.({ fallthrough: false }, from, to, layout),
+    "M 396 272 C 396 363, 396 363, 396 454",
+  );
+  assert.equal(
+    playgroundModel.flowEdgePath?.({ fallthrough: true }, from, to, layout),
+    "M 396 272 C 768 302, 768 424, 396 454",
+  );
+});
+
 test("buildFlowModel keeps known unexecuted syntax dashed", () => {
   const model = buildFlowModel({
     nodes: [

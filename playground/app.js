@@ -4,6 +4,7 @@ import {
   concreteDisplayValue,
   createASTFlowModel,
   createRuntimeFlowModel,
+  flowEdgePath,
   flowScrollTarget,
   formatBytes,
   layoutASTFlowGraph,
@@ -779,12 +780,7 @@ function renderGraph(model, preserveSelection = false) {
     const from = layout.positions.get(edge.from);
     const to = layout.positions.get(edge.to);
     const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
-    const fromX = from.x + layout.nodeWidth / 2;
-    const fromY = from.y + layout.nodeHeight;
-    const toX = to.x + layout.nodeWidth / 2;
-    const toY = to.y;
-    const bend = Math.max(30, (toY - fromY) * .5);
-    path.setAttribute("d", `M ${fromX} ${fromY} C ${fromX} ${fromY + bend}, ${toX} ${toY - bend}, ${toX} ${toY}`);
+    path.setAttribute("d", flowEdgePath(edge, from, to, layout));
     path.setAttribute("class", `flow-edge ${edge.state}`);
     path.dataset.sequence = String(edge.sequence || 0);
     path.dataset.to = edge.to;
