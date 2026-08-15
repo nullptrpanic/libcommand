@@ -50,6 +50,10 @@ type TraceNode struct {
 	// Statements in one group are sequential; distinct groups may be laid out
 	// alongside one another. It does not affect evaluation.
 	FlowGroup uint32 `json:"flowGroup,omitempty"`
+	// FlowCanSkip marks a statement whose control flow can reach the following
+	// statement without entering any visible child group, such as an if without
+	// an else or a case with no matching pattern. It does not affect evaluation.
+	FlowCanSkip bool `json:"flowCanSkip,omitempty"`
 }
 
 // TraceMemory is a logical retained-size snapshot. It describes the same
@@ -243,13 +247,14 @@ func (trace *executionTrace) discoverStatement(statement *syntax.Stmt, source, n
 	}
 	trace.nextNodeID++
 	node := &TraceNode{
-		ID:        trace.nextNodeID,
-		ParentID:  parentID,
-		Kind:      traceStatementKind(statement),
-		Snippet:   traceSnippet(source, statement),
-		Source:    traceSource(name, statement),
-		Embedded:  embedded,
-		FlowGroup: flowGroup,
+		ID:          trace.nextNodeID,
+		ParentID:    parentID,
+		Kind:        traceStatementKind(statement),
+		Snippet:     traceSnippet(source, statement),
+		Source:      traceSource(name, statement),
+		Embedded:    embedded,
+		FlowGroup:   flowGroup,
+		FlowCanSkip: traceFlowCanSkip(statement),
 	}
 	trace.nodeIDs[statement] = node.ID
 	trace.nodes[node.ID] = node
@@ -318,6 +323,21 @@ func traceVisibleChildGroups(statement *syntax.Stmt) map[*syntax.Stmt]uint32 {
 		add(0, command.Stmt)
 	}
 	return children
+}
+
+func traceFlowCanSkip(statement *syntax.Stmt) bool {
+	switch command := statement.Cmd.(type) {
+	case *syntax.IfClause:
+		last := command
+		for last.Else != nil {
+			last = last.Else
+		}
+		return last.ThenPos.IsValid()
+	case *syntax.CaseClause:
+		return true
+	default:
+		return false
+	}
 }
 
 func (trace *executionTrace) ensurePath(state *State) uint64 {

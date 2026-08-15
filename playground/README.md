@@ -87,6 +87,8 @@ the same AST.
   still shows each concrete command call separately.
 - AST graphs start at the top center. Sequential bodies advance downward;
   alternative bodies share a row and rejoin before the following statement.
+  A condition without an exhaustive alternative retains a direct fallthrough
+  edge; loop-body statements still connect strictly in source order.
   Live following keeps the active node horizontally centered and scrolls
   vertically only enough to keep it visible with context.
 

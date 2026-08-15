@@ -425,7 +425,9 @@ Observer 在模拟 Goroutine 上执行，因此缓慢或阻塞的 Observer 会�
 `TraceNode.Embedded` 用来标记条件命令、命令替换、管道操作数等父语句内部的求值
 细节。它只是一项展示元数据：节点 ID、执行事件和 Shell 行为均不改变，因此 AST
 视图可以折叠它，执行视图仍可完整保留。`TraceNode.FlowGroup` 区分同一父节点下
-顺序执行的语句体和互斥语句体，供分层布局使用，同样不具备执行语义。
+顺序执行的语句体和互斥语句体，供分层布局使用。`TraceNode.FlowCanSkip` 标记无需
+进入任何可见语句体即可继续的条件容器，例如没有 `else` 的 `if`。二者均为展示
+元数据，不具备执行语义。
 
 浏览器 Playground 将模拟器编译为 WebAssembly，并在一次性 Web Worker 中运行。
 它提供独立的 AST 和实时 Runtime 视图、命令注册、路径可视化、执行控制和逻辑

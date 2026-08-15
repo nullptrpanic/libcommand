@@ -450,7 +450,9 @@ pipeline operand. It is presentation metadata only: node IDs, execution events,
 and Shell behavior are unchanged, so clients may fold it in an AST view while
 retaining it in an execution-oriented view. `TraceNode.FlowGroup` identifies
 sequential bodies versus alternative bodies under one parent for layered graph
-layout; it likewise has no evaluation semantics.
+layout. `TraceNode.FlowCanSkip` marks a conditional container that can continue
+without entering any visible body, such as an `if` without `else`. Both fields
+are presentation metadata and have no evaluation semantics.
 
 The browser Playground compiles the simulator to WebAssembly and runs it in a
 disposable Web Worker. It provides separate AST and live Runtime views,

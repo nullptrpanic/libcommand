@@ -50,9 +50,11 @@ export function createASTFlowModel(initialDefinitions = []) {
       return true;
     }
     if (existing) {
-      const parentChanged = existing.definition.parentId !== definition.parentId;
+      const topologyChanged = existing.definition.parentId !== definition.parentId
+        || existing.definition.flowGroup !== definition.flowGroup
+        || existing.definition.flowCanSkip !== definition.flowCanSkip;
       existing.definition = definition;
-      if (parentChanged) rebuildSyntaxEdges();
+      if (topologyChanged) rebuildSyntaxEdges();
       return false;
     }
     const syntaxNode = {
@@ -76,6 +78,8 @@ export function createASTFlowModel(initialDefinitions = []) {
       inputSnapshotTruncated: false,
       outputSnapshot: null,
       outputSnapshotTruncated: false,
+      syntaxParentID: null,
+      syntaxFlowGroup: 0,
     };
     model.nodes.push(syntaxNode);
     model.nodes.sort((left, right) => left.nodeID - right.nodeID);
@@ -130,25 +134,64 @@ export function createASTFlowModel(initialDefinitions = []) {
 
   function updateSyntaxEdgeStates() {
     for (const edge of model.edges) {
+      const source = nodeByDefinitionID.get(edge.fromNodeID);
       const target = nodeByDefinitionID.get(edge.toNodeID);
-      edge.pathID = target?.pathID || 0;
-      edge.sequence = target?.sequence || 0;
-      edge.state = !target?.executed ? "not-executed" : (target.reachedFromUnresolvedPath ? "unresolved" : "executed");
+      edge.pathID = target?.pathID || source?.pathID || 0;
+      edge.sequence = target?.sequence || source?.sequence || 0;
+      const bypassedChildExecuted = edge.fallthrough
+        && edge.bypassedNodeIDs.some((nodeID) => nodeByDefinitionID.get(nodeID)?.executed);
+      if (bypassedChildExecuted) {
+        edge.state = source?.forked && target?.executed ? "unresolved" : "not-executed";
+        continue;
+      }
+      edge.state = !source?.executed || !target?.executed
+        ? "not-executed"
+        : (source.reachedFromUnresolvedPath || target.reachedFromUnresolvedPath ? "unresolved" : "executed");
     }
   }
 
   function rebuildSyntaxEdges() {
     const edges = [];
-    let previousNode = null;
+    const roots = [];
+    const childGroups = new Map();
     for (const node of model.nodes) {
       const parent = visibleSyntaxParent(node.definition);
       if (parent) {
-        edges.push(syntaxEdge(parent.node, node, true, parent.flowGroup));
-      } else if (previousNode) {
-        edges.push(syntaxEdge(previousNode, node, false, 0));
+        node.syntaxParentID = parent.node.id;
+        node.syntaxFlowGroup = parent.flowGroup;
+        const groups = childGroups.get(parent.node.id) || new Map();
+        groups.set(parent.flowGroup, [...(groups.get(parent.flowGroup) || []), node]);
+        childGroups.set(parent.node.id, groups);
+      } else {
+        node.syntaxParentID = null;
+        node.syntaxFlowGroup = 0;
+        roots.push(node);
       }
-      previousNode = node;
     }
+
+    const connectSequence = (sequence, incoming = []) => {
+      let exits = incoming;
+      for (const node of sequence) {
+        for (const exit of exits) {
+          edges.push(syntaxEdge(exit.node, node, node.syntaxParentID === exit.node.id, node.syntaxFlowGroup, exit));
+        }
+        const groups = [...(childGroups.get(node.id)?.entries() || [])]
+          .sort(([left], [right]) => left - right);
+        exits = groups.length === 0
+          ? [{ node }]
+          : groups.flatMap(([, children]) => connectSequence(children, [{ node }]));
+        if (groups.length !== 0 && node.definition.flowCanSkip) {
+          exits.push({
+            node,
+            fallthrough: true,
+            bypassedNodeIDs: groups.flatMap(([, children]) => children.map((child) => child.nodeID)),
+          });
+        }
+      }
+      return exits;
+    };
+
+    connectSequence(roots);
     model.edges = edges;
     updateSyntaxEdgeStates();
   }
@@ -444,7 +487,7 @@ export function liveControlView(active, paused) {
   return { icon: "Ⅱ", label: "Pause", running: true, stopVisible: true };
 }
 
-function syntaxEdge(from, to, structural, flowGroup) {
+function syntaxEdge(from, to, structural, flowGroup, exit = {}) {
   return {
     id: `ast-edge:${from.id}:${to.id}`,
     from: from.id,
@@ -456,6 +499,8 @@ function syntaxEdge(from, to, structural, flowGroup) {
     state: "not-executed",
     structural,
     flowGroup,
+    fallthrough: Boolean(exit.fallthrough),
+    bypassedNodeIDs: exit.bypassedNodeIDs || [],
   };
 }
 
@@ -513,13 +558,16 @@ export function layoutASTFlowGraph(nodes, edges, minimumWidth = 720, minimumHeig
   const nodeByID = new Map(nodes.map((node) => [node.id, node]));
   const childIDs = new Set();
   const childGroups = new Map();
-  for (const edge of edges) {
-    if (!edge.structural || !nodeByID.has(edge.from) || !nodeByID.has(edge.to)) continue;
-    childIDs.add(edge.to);
-    const groups = childGroups.get(edge.from) || new Map();
-    const group = Number(edge.flowGroup || 0);
-    groups.set(group, [...(groups.get(group) || []), nodeByID.get(edge.to)]);
-    childGroups.set(edge.from, groups);
+  for (const node of nodes) {
+    const parentID = node.syntaxParentID !== undefined
+      ? node.syntaxParentID
+      : (node.definition.parentId ? `ast:${node.definition.parentId}` : null);
+    if (!parentID || !nodeByID.has(parentID)) continue;
+    childIDs.add(node.id);
+    const groups = childGroups.get(parentID) || new Map();
+    const group = Number(node.syntaxFlowGroup ?? node.definition.flowGroup ?? 0);
+    groups.set(group, [...(groups.get(group) || []), node]);
+    childGroups.set(parentID, groups);
   }
 
   function layoutSequence(sequence) {

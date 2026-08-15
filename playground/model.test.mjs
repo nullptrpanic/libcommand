@@ -197,6 +197,94 @@ test("AST source-order edges continue after the previous top-level subtree", () 
   assert.ok(!model.edges.some((edge) => edge.from === "ast:1" && edge.to === "ast:3"));
 });
 
+test("AST control flow rejoins every alternative before the following statement", () => {
+  const model = buildFlowModel({
+    nodes: [
+      node(1, 0, "loop", "for i in $(seq 1 3)"),
+      node(2, 1, "condition", "if (( i == 1 ))"),
+      { ...node(3, 2, "command", "text=first"), flowGroup: 0 },
+      { ...node(4, 2, "command", "text=other"), flowGroup: 1 },
+      node(5, 1, "command", "lark-cli send"),
+      node(6, 0, "command", "echo done"),
+    ],
+  });
+
+  assert.deepEqual(edgePairs(model), [
+    ["ast:1", "ast:2"],
+    ["ast:2", "ast:3"],
+    ["ast:2", "ast:4"],
+    ["ast:3", "ast:5"],
+    ["ast:4", "ast:5"],
+    ["ast:5", "ast:6"],
+  ]);
+});
+
+test("AST control flow keeps statements sequential inside each alternative", () => {
+  const model = buildFlowModel({
+    nodes: [
+      node(1, 0, "condition", "case $mode in"),
+      { ...node(2, 1, "command", "prepare inline"), flowGroup: 0 },
+      { ...node(3, 1, "command", "send inline"), flowGroup: 0 },
+      { ...node(4, 1, "command", "send staged"), flowGroup: 1 },
+      node(5, 0, "command", "echo done"),
+    ],
+  });
+
+  assert.deepEqual(edgePairs(model), [
+    ["ast:1", "ast:2"],
+    ["ast:2", "ast:3"],
+    ["ast:1", "ast:4"],
+    ["ast:3", "ast:5"],
+    ["ast:4", "ast:5"],
+  ]);
+});
+
+test("AST merge edges remain dashed when their source alternative was not executed", () => {
+  const model = buildFlowModel({
+    nodes: [
+      node(1, 0, "condition", "if enabled"),
+      { ...node(2, 1, "command", "text=enabled"), flowGroup: 0 },
+      { ...node(3, 1, "command", "text=disabled"), flowGroup: 1 },
+      node(4, 0, "command", "lark-cli send"),
+    ],
+    events: [
+      event(1, "statement_started", 1, 1),
+      event(2, "statement_started", 2, 1),
+      event(3, "statement_finished", 2, 1),
+      event(4, "statement_started", 4, 1),
+      event(5, "statement_finished", 4, 1),
+      event(6, "statement_finished", 1, 1),
+    ],
+  });
+
+  assert.equal(edgeState(model, "ast:2", "ast:4"), "executed");
+  assert.equal(edgeState(model, "ast:3", "ast:4"), "not-executed");
+});
+
+test("AST conditions without an else retain their direct fallthrough edge", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "condition", "if enabled"), flowCanSkip: true },
+      node(2, 1, "command", "lark-cli log"),
+      node(3, 0, "loop", "for item in values"),
+    ],
+    events: [
+      event(1, "statement_started", 1, 1),
+      event(2, "statement_started", 3, 1),
+      event(3, "statement_finished", 3, 1),
+      event(4, "statement_finished", 1, 1),
+    ],
+  });
+
+  assert.deepEqual(edgePairs(model), [
+    ["ast:1", "ast:2"],
+    ["ast:2", "ast:3"],
+    ["ast:1", "ast:3"],
+  ]);
+  assert.equal(edgeState(model, "ast:2", "ast:3"), "not-executed");
+  assert.equal(edgeState(model, "ast:1", "ast:3"), "executed");
+});
+
 test("AST flow can overlay streamed execution without replacing its syntax nodes", () => {
   const ast = createASTFlowModel([
     node(1, 0, "condition", "if true"),
@@ -707,4 +795,8 @@ function valuesOf(tokens, kind) {
 
 function edgePairs(model) {
   return model.edges.map((edge) => [edge.from, edge.to]);
+}
+
+function edgeState(model, from, to) {
+  return model.edges.find((edge) => edge.from === from && edge.to === to)?.state;
 }

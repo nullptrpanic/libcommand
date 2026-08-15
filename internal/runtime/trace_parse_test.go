@@ -70,6 +70,11 @@ printf done | base64`
 		"text=first": 0,
 		"text=other": 1,
 	}
+	wantFlowCanSkip := map[string]bool{
+		`if [[ -n "$CHAT_ID" ]]; then echo reached fi`:                                                           true,
+		`for i in $(seq 1 2); do if (( i == 1 )); then text=first else text=other fi lark-cli send "$text" done`: false,
+		`if (( i == 1 )); then text=first else text=other fi`:                                                    false,
+	}
 	for _, node := range nodes {
 		want := wantEmbedded[node.Snippet]
 		if node.Embedded != want {
@@ -77,6 +82,9 @@ printf done | base64`
 		}
 		if group, relevant := wantFlowGroups[node.Snippet]; relevant && node.FlowGroup != group {
 			t.Errorf("node %q flow group = %d, want %d", node.Snippet, node.FlowGroup, group)
+		}
+		if canSkip, relevant := wantFlowCanSkip[node.Snippet]; relevant && node.FlowCanSkip != canSkip {
+			t.Errorf("node %q flow can skip = %v, want %v", node.Snippet, node.FlowCanSkip, canSkip)
 		}
 	}
 
