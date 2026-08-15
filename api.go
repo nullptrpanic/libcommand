@@ -86,6 +86,7 @@ const (
 	PathMissing   = shellruntime.PathMissing
 	PathFile      = shellruntime.PathFile
 	PathDirectory = shellruntime.PathDirectory
+	PathDevice    = shellruntime.PathDevice
 )
 
 // CommandKind describes one definition selected by Shell lookup.
@@ -108,6 +109,7 @@ const (
 	TraceSimulationStarted  = shellruntime.TraceSimulationStarted
 	TraceNodeDiscovered     = shellruntime.TraceNodeDiscovered
 	TraceStatementStarted   = shellruntime.TraceStatementStarted
+	TraceStatementActivated = shellruntime.TraceStatementActivated
 	TraceStatementFinished  = shellruntime.TraceStatementFinished
 	TracePathForked         = shellruntime.TracePathForked
 	TraceCommandStarted     = shellruntime.TraceCommandStarted

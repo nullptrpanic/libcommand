@@ -21,6 +21,7 @@ const (
 	PathMissing PathKind = iota
 	PathFile
 	PathDirectory
+	PathDevice
 )
 
 // CommandKind describes the first definition selected by shell lookup.
@@ -85,13 +86,7 @@ func (c *CommandContext) ResolvePath(name string) string {
 }
 
 func (c *CommandContext) PathKind(name string) PathKind {
-	if c.state.fs.isDir(name) {
-		return PathDirectory
-	}
-	if _, exists := c.state.fs.files[name]; exists {
-		return PathFile
-	}
-	return PathMissing
+	return c.state.fs.pathKind(name)
 }
 
 func (c *CommandContext) EnsureDirectory(name string) error {
@@ -114,11 +109,68 @@ func (c *CommandContext) ParseArithmetic(source string) (syntax.ArithmExpr, erro
 // Input returns the remaining stdin bytes and whether the complete stream is
 // unresolved.
 func (c *CommandContext) Input() ([]byte, bool) {
-	return c.state.stdin.Data()
+	input, unresolved := c.state.stdin.Data()
+	return append([]byte(nil), input...), unresolved
+}
+
+// InputUnresolved reports whether the remaining stdin stream is unresolved
+// without materializing a copy of its concrete prefix.
+func (c *CommandContext) InputUnresolved() bool {
+	_, unresolved := c.state.stdin.Data()
+	return unresolved
 }
 
 // SetInput replaces the remaining stdin bytes and their resolution state.
 func (c *CommandContext) SetInput(input []byte, unresolved bool) {
+	input = append([]byte(nil), input...)
+	c.setInputView(input, unresolved)
+}
+
+// ConsumeInput returns and removes one input segment without copying the
+// unconsumed suffix. maximum zero means no byte limit. exact ignores the
+// delimiter and succeeds only when maximum bytes are available. When
+// joinEscapedLines is true, backslash-newline pairs are removed before the
+// terminating newline is found.
+func (c *CommandContext) ConsumeInput(delimiter byte, maximum int, exact, joinEscapedLines bool) ([]byte, bool, bool) {
+	input, unresolved := c.state.stdin.Data()
+	if maximum > 0 && exact {
+		count := min(maximum, len(input))
+		result := append([]byte(nil), input[:count]...)
+		c.setInputView(input[count:len(input):len(input)], unresolved)
+		return result, count == maximum, unresolved
+	}
+
+	var result []byte
+	segmentStart := 0
+	for index, value := range input {
+		if value == delimiter {
+			if joinEscapedLines && delimiter == '\n' {
+				backslashes := 0
+				for position := index - 1; position >= segmentStart && input[position] == '\\'; position-- {
+					backslashes++
+				}
+				if backslashes%2 != 0 {
+					result = append(result, input[segmentStart:index-1]...)
+					segmentStart = index + 1
+					continue
+				}
+			}
+			result = append(result, input[segmentStart:index]...)
+			c.setInputView(input[index+1:len(input):len(input)], unresolved)
+			return result, true, unresolved
+		}
+		if maximum > 0 && index+1 == maximum {
+			result = append(result, input[segmentStart:maximum]...)
+			c.setInputView(input[maximum:len(input):len(input)], unresolved)
+			return result, true, unresolved
+		}
+	}
+	result = append(result, input[segmentStart:]...)
+	c.setInputView(nil, unresolved)
+	return result, false, unresolved
+}
+
+func (c *CommandContext) setInputView(input []byte, unresolved bool) {
 	if unresolved {
 		c.state.stdin = newUnresolved(input)
 		return
@@ -252,27 +304,24 @@ func (c *CommandContext) AssignVariable(name string, value *expand.Variable, unk
 	if err := c.execution.checkVariableMaterialization(value); err != nil {
 		return err
 	}
-	if err := assignShellVariable(c.state, name, *value, unknown); err != nil {
-		return err
-	}
-	return c.execution.checkStateMaterialization(c.state)
+	return c.mutateVariables(func() error {
+		return assignShellVariable(c.state, name, *value, unknown)
+	})
 }
 
 func (c *CommandContext) AssignIndexedVariable(name string, value *expand.Variable, unknown bool, slots map[int]struct{}) error {
 	if err := c.execution.checkVariableMaterialization(value); err != nil {
 		return err
 	}
-	if err := assignShellIndexedVariable(c.state, name, *value, unknown, slots); err != nil {
-		return err
-	}
-	return c.execution.checkStateMaterialization(c.state)
+	return c.mutateVariables(func() error {
+		return assignShellIndexedVariable(c.state, name, *value, unknown, slots)
+	})
 }
 
 func (c *CommandContext) UnsetVariable(name string) error {
-	if err := unsetShellVariable(c.state, name); err != nil {
-		return err
-	}
-	return c.execution.checkStateMaterialization(c.state)
+	return c.mutateVariables(func() error {
+		return unsetShellVariable(c.state, name)
+	})
 }
 
 func (c *CommandContext) PositionalArguments() []string {
@@ -285,9 +334,7 @@ func (c *CommandContext) PositionalArguments() []string {
 }
 
 func (c *CommandContext) ReadFile(name string) ([]byte, bool, bool) {
-	contents, unknown := c.state.fs.readValue(name)
-	_, exists := c.state.fs.files[name]
-	return contents, unknown, exists
+	return c.state.fs.readFile(name)
 }
 
 func (c *CommandContext) ReplacePositionalArguments(arguments []string) {
@@ -317,8 +364,24 @@ func (c *CommandContext) DefineVariable(name string, value *expand.Variable, unk
 	if err := c.execution.checkVariableMaterialization(value); err != nil {
 		return err
 	}
-	c.state.vars.putIndexedWithCertainty(name, *value, unknown, slots)
-	return c.execution.checkStateMaterialization(c.state)
+	return c.mutateVariables(func() error {
+		c.state.vars.putIndexedWithCertainty(name, *value, unknown, slots)
+		return nil
+	})
+}
+
+func (c *CommandContext) mutateVariables(change func() error) (err error) {
+	original := c.state.vars
+	c.state.vars = c.state.vars.clone()
+	defer func() {
+		if err != nil {
+			c.state.vars = original
+		}
+	}()
+	if err = change(); err == nil {
+		err = c.execution.checkStateMaterialization(c.state)
+	}
+	return err
 }
 
 func (c *CommandContext) IndexedSlots(name string) map[int]struct{} {

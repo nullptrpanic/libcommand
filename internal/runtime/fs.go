@@ -83,12 +83,27 @@ func (fs *memoryFS) readValue(name string) ([]byte, bool) {
 }
 
 func (fs *memoryFS) readFile(name string) ([]byte, bool, bool) {
+	name = path.Clean(name)
 	if name == "/dev/null" {
 		return nil, false, true
 	}
 	contents, exists := fs.files[name]
 	_, unknown := fs.unknownFiles[name]
 	return append([]byte(nil), contents...), unknown, exists
+}
+
+func (fs *memoryFS) pathKind(name string) PathKind {
+	name = path.Clean(name)
+	if name == "/dev/null" {
+		return PathDevice
+	}
+	if _, exists := fs.dirs[name]; exists {
+		return PathDirectory
+	}
+	if _, exists := fs.files[name]; exists {
+		return PathFile
+	}
+	return PathMissing
 }
 
 func (fs *memoryFS) write(name string, contents []byte, appendMode bool) error {
@@ -104,10 +119,10 @@ func (fs *memoryFS) writeAbstract(name string, contents []byte, appendMode, unkn
 }
 
 func (fs *memoryFS) writeValueMode(name string, contents []byte, appendMode, unknown, createParents bool) error {
+	name = path.Clean(name)
 	if name == "/dev/null" {
 		return nil
 	}
-	name = path.Clean(name)
 	if _, exists := fs.dirs[name]; exists {
 		return &iofs.PathError{Op: "open", Path: name, Err: errIsDirectory}
 	}
@@ -206,6 +221,9 @@ func (fs *memoryFS) missingDirectories(name string) ([]string, int, error) {
 	missing := make([]string, 0)
 	materializedBytes := 0
 	for {
+		if name == "/dev/null" {
+			return nil, 0, &iofs.PathError{Op: "mkdir", Path: name, Err: errNotDirectory}
+		}
 		if _, exists := fs.dirs[name]; exists {
 			break
 		}

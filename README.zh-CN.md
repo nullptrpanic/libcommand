@@ -349,7 +349,9 @@ builder.Command("evaluate", func(
 - `CommandContext` 暴露的虚拟文件系统、输入、选项、查找、算术和嵌套执行操作。
 
 状态变更只作用于当前路径，采用 Copy-on-Write，并受逻辑物化预算检查。命令返回
-后不得继续持有 `CommandContext` 或 `State` 指针。
+后不得继续持有 `CommandContext` 或 `State` 指针。`Input` 和 `ConsumeInput`
+返回的字节切片归调用方所有，`SetInput` 也会复制传入数据，因此命令无法通过共享
+缓冲区修改其他保留路径。
 
 返回值语义是明确的：
 
@@ -370,7 +372,7 @@ Handler Panic 会被转换为模拟错误。回调返回后，Runtime 会检查 
 
 | Limit | 默认值 | 作用范围 |
 | --- | ---: | --- |
-| `MaxExecutionSteps` | 10,000 | 动态语句、命令调用，以及路径探索产生的额外后继。 |
+| `MaxExecutionSteps` | 10,000 | 动态语句、命令调用、case 模式求值，以及路径探索产生的额外后继。 |
 | `MaxMemoryBytes` | 2 MiB | 初始请求和模拟器保留的保守逻辑物化数据。 |
 
 ```mermaid
@@ -422,12 +424,17 @@ flowchart LR
 
 Observer 在模拟 Goroutine 上执行，因此缓慢或阻塞的 Observer 会增加 Trace 模式
 的延迟。Observer 返回 `false` 会停止后续事件，但不会终止 Shell 执行。
+`TraceStatementActivated` 表示一个仍处于外层求值生命周期内的语句再次被控制流
+进入；循环从第二轮开始每轮都会发送该事件，客户端无需伪造嵌套的 start/finish
+事件即可重放循环头。
 `TraceNode.Embedded` 用来标记条件命令、命令替换、管道操作数等父语句内部的求值
 细节。它只是一项展示元数据：节点 ID、执行事件和 Shell 行为均不改变，因此 AST
 视图可以折叠它，执行视图仍可完整保留。`TraceNode.FlowGroup` 区分同一父节点下
 顺序执行的语句体和互斥语句体，供分层布局使用。`TraceNode.FlowCanSkip` 标记无需
-进入任何可见语句体即可继续的条件容器，例如没有 `else` 的 `if`。二者均为展示
-元数据，不具备执行语义。
+进入任何可见语句体即可继续的控制流容器，例如没有 `else` 的 `if` 或零次迭代的
+循环。
+`FlowCommand`、`FlowFunction`、`FlowGroupExit` 和 `FlowGroupDefault` 分别描述直接
+调用、函数声明及 `case` 控制流。这些字段均为展示元数据，不具备执行语义。
 
 浏览器 Playground 将模拟器编译为 WebAssembly，并在一次性 Web Worker 中运行。
 它提供独立的 AST 和实时 Runtime 视图、命令注册、路径可视化、执行控制和逻辑
@@ -435,8 +442,9 @@ Observer 在模拟 Goroutine 上执行，因此缓慢或阻塞的 Observer 会�
 
 ### Playground 动态预览
 
-**实时 Runtime 调用流。** 展开后的命令按照实际执行顺序逐个出现；当前节点、
-画布位置、逻辑内存和节点检查器会随模拟进度同步更新。
+**实时 Runtime 调用流。** 实际访问的循环和条件会与展开后的命令一起按执行顺序
+逐个出现；控制语句每次重入都会重新展示并高亮，当前节点、画布位置、逻辑内存和
+节点检查器会随模拟进度同步更新。
 
 ![Playground 实时构建 Runtime 命令流并查看命令输出](assets/playground/runtime-flow.gif)
 

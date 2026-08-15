@@ -76,9 +76,10 @@ optionsDone:
 		resolved = shell.ResolvePath(target)
 		resolvedUnknown = cdPathUnknown || oldUnknown && !path.IsAbs(target)
 	}
-	if shell.PathKind(resolved) != runtime.PathDirectory {
+	kind := shell.PathKind(resolved)
+	if kind != runtime.PathDirectory {
 		message := "No such file or directory"
-		if shell.PathKind(resolved) == runtime.PathFile {
+		if kind != runtime.PathMissing {
 			message = "Not a directory"
 		} else if cdPathUnknown || shell.CandidateContext() {
 			failure := shell.SnapshotForUnknownFailure()

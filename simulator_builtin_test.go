@@ -630,6 +630,83 @@ lark-cli "let:$?:$x"`
 	})
 }
 
+func TestSimulatorUsesBashArithmeticControlAndRecursiveVariables(t *testing.T) {
+	source := `value='1+2'
+x=0
+lark-cli "$((2 ? 1 : 0))" "$((0 && (x=1)))" "$((value))" "$x"`
+	requireJoinedArguments(t, source, []string{"1 0 3 0"})
+}
+
+func TestSimulatorUsesConsistentDevNullSemantics(t *testing.T) {
+	source := `source /dev/../dev/null && lark-cli sourced
+[[ -e /dev/null ]] && lark-cli exists
+[[ -f /dev/null ]] || lark-cli not-regular
+[[ -c /dev/null ]] && lark-cli character
+test -e /dev/null && lark-cli builtin-exists
+test -c /dev/null && lark-cli builtin-character
+cd /dev/null || lark-cli not-directory`
+	requireFirstArguments(t, source, []string{"sourced", "exists", "not-regular", "character", "builtin-exists", "builtin-character", "not-directory"})
+}
+
+func TestSimulatorAdvancesReadAndGetoptsBeforeReadonlyAssignmentFailure(t *testing.T) {
+	var calls []string
+	simulator := mustBuildSimulator(t, "lark-cli", recordFirstArgument(t, &calls))
+	source := `readonly read_target option
+read read_target
+read_status=$?
+read next
+lark-cli "read:$read_status:$next"
+set -- -a -b
+getopts ab option
+getopts_status=$?
+getopts ab next_option
+lark-cli "getopts:$getopts_status:$next_option:$OPTIND"`
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{
+		Source: source,
+		Stdin:  []byte("first\nsecond\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"read:0:second", "getopts:1:b:3"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestSimulatorKeepsGetoptsProgressWhenOPTINDIsReadonly(t *testing.T) {
+	source := `readonly OPTIND=1
+set -- -a -b
+getopts ab first
+getopts ab second
+lark-cli "$first:$second:$OPTIND"`
+	requireFirstArguments(t, source, []string{"a:b:1"})
+}
+
+func TestSimulatorAdvancesGetoptsBeforeInvalidTargetFailure(t *testing.T) {
+	source := `set -- -a -b
+getopts ab bad-name
+first_status=$?
+getopts ab option
+lark-cli "$first_status:$option:$OPTIND"`
+	requireFirstArguments(t, source, []string{"1:b:3"})
+}
+
+func TestSimulatorReadContinuesPastReadonlyTargets(t *testing.T) {
+	var calls []string
+	simulator := mustBuildSimulator(t, "lark-cli", recordFirstArgument(t, &calls))
+	source := `readonly middle=old
+read first middle last
+lark-cli "$?:$first:$middle:$last"`
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{
+		Source: source,
+		Stdin:  []byte("one two three\n"),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"0:one:old:three"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
 func TestSimulatorFindsSupportedShellBuiltins(t *testing.T) {
 	source := `command -v getopts >/dev/null && lark-cli getopts
 command -v declare >/dev/null && lark-cli declare

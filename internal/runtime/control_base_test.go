@@ -270,6 +270,36 @@ func TestUnknownCaseBranchesReachSharedExecutionStepBudget(t *testing.T) {
 	}
 }
 
+func TestCasePatternScanHonorsCancellation(t *testing.T) {
+	ctx := &cancelDuringCommandContext{}
+	e, s := newNoOpExecutor(ctx, 10, &Request{})
+	item := &syntax.CaseItem{Patterns: []*syntax.Word{
+		{Parts: []syntax.WordPart{&syntax.Lit{Value: "first"}}},
+		{Parts: []syntax.WordPart{&syntax.Lit{Value: "second"}}},
+	}}
+	if _, err := e.caseItemTruth(s, "missing", false, item); !errors.Is(err, context.Canceled) {
+		t.Fatalf("caseItemTruth() error = %v, want context.Canceled", err)
+	}
+	if ctx.calls < 2 {
+		t.Fatalf("context checks = %d, want cancellation during pattern scanning", ctx.calls)
+	}
+}
+
+func TestCasePatternScanConsumesExecutionBudget(t *testing.T) {
+	file := parseForTest(t, `case value in first|second|third) :;; esac`, "case-budget.sh")
+	paths, steps, err := evaluateForTest(context.Background(), file, &Request{}, &Config{
+		MaxExecutionSteps: 2,
+		MaxMemoryBytes:    defaultMaxMemoryBytes,
+		LookupCommand:     lookupAllCommands(noOpDispatch),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if steps != 2 || len(paths) != 1 || paths[0].status != StatusIncomplete {
+		t.Fatalf("steps = %d, paths = %#v; want exhausted case-pattern budget", steps, paths)
+	}
+}
+
 func TestAssignmentOnlyLoopReachesExecutionStepBudget(t *testing.T) {
 	file := parseForTest(t, `while x=1; do x=2; done`, "loop.sh")
 

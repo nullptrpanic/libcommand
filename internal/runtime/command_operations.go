@@ -3,6 +3,7 @@ package runtime
 import (
 	"fmt"
 
+	"github.com/nullptrpanic/libcommand/internal/materialize"
 	"mvdan.cc/sh/v3/expand"
 )
 
@@ -156,6 +157,11 @@ func (c *CommandContext) executeSource(source, name string, arguments []string) 
 // RunShell executes a parsed child-shell program in an isolated shell state.
 func (c *CommandContext) executeRunShell(program *ShellProgram) ([]*pathResult, error) {
 	parent := c.state
+	releaseParent, err := c.execution.retainNestedShellParent(parent)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseParent()
 	child := newShellChild(parent)
 	for name, enabled := range program.Options {
 		if !setShellOption(child, name, enabled) {
@@ -190,4 +196,31 @@ func (c *CommandContext) executeRunShell(program *ShellProgram) ([]*pathResult, 
 		paths = append(paths, &pathResult{state: result, status: status})
 	}
 	return paths, evaluationErr
+}
+
+func (e *ExecutionContext) retainNestedShellParent(parent *State) (func(), error) {
+	maximum := normalizedMaxMemoryBytes(e.config.MaxMemoryBytes)
+	parentBytes, ok := stateMaterialization(parent)
+	if ok {
+		parentBytes, ok = materialize.Add(parentBytes, materialize.EntryBytes, maximum)
+	}
+	auxiliary := 0
+	if ok {
+		auxiliary, ok = e.retainedAuxiliaryBytes(maximum)
+	}
+	if ok {
+		_, ok = materialize.Add(auxiliary, parentBytes, maximum)
+	}
+	nestedBytes := 0
+	if ok {
+		nestedBytes, ok = materialize.Add(e.nestedShellBytes, parentBytes, maximum)
+	}
+	if !ok {
+		return nil, materialize.LimitError(maximum)
+	}
+	previous := e.nestedShellBytes
+	e.nestedShellBytes = nestedBytes
+	return func() {
+		e.nestedShellBytes = previous
+	}, nil
 }

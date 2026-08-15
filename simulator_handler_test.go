@@ -3,9 +3,13 @@ package libcommand
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
+
+	"mvdan.cc/sh/v3/expand"
 )
 
 func TestUserCommandEvaluatesShell(t *testing.T) {
@@ -77,6 +81,108 @@ func TestUserCommandRunsChildShell(t *testing.T) {
 	want := []string{"argument:child", "unset"}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestNestedShellParentsCountTowardMemoryLimit(t *testing.T) {
+	var recurse Command
+	recurse = func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		depth, err := strconv.Atoi(argumentString(t, invocation.Args[0]))
+		if err != nil {
+			return nil, err
+		}
+		if depth == 0 {
+			return &CommandResult{}, nil
+		}
+		return command.RunShell(&ShellProgram{
+			Source: fmt.Sprintf("recurse %d", depth-1),
+			Name:   "nested.sh",
+		}), nil
+	}
+	simulator := NewBuilder().
+		Limits(&Limits{MaxExecutionSteps: 100, MaxMemoryBytes: 8 << 10}).
+		Command("recurse", recurse).
+		Build()
+	err := simulator.Simulate(context.Background(), &SimulationRequest{
+		Source: "recurse 12",
+		Env:    map[string]string{"BALLAST": strings.Repeat("x", 1024)},
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum materialized byte count 8192 reached") {
+		t.Fatalf("nested shell error = %v", err)
+	}
+}
+
+func TestCommandContextInputDoesNotExposeStateBuffer(t *testing.T) {
+	var observed string
+	simulator := NewBuilder().
+		Command("mutate-copy", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+			input, _ := command.Input()
+			input[0] = 'X'
+			return &CommandResult{}, nil
+		}).
+		Command("observe-input", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+			input, _ := command.Input()
+			observed = string(input)
+			return &CommandResult{}, nil
+		}).
+		Build()
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: "mutate-copy; observe-input", Stdin: []byte("abc")}); err != nil {
+		t.Fatal(err)
+	}
+	if observed != "abc" {
+		t.Fatalf("observed input = %q, want abc", observed)
+	}
+}
+
+func TestCommandContextSetInputCopiesCallerBuffer(t *testing.T) {
+	var observed string
+	simulator := NewBuilder().
+		Command("set-input", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+			input := []byte("abc")
+			command.SetInput(input, false)
+			input[0] = 'X'
+			return &CommandResult{}, nil
+		}).
+		Command("observe-input", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+			input, _ := command.Input()
+			observed = string(input)
+			return &CommandResult{}, nil
+		}).
+		Build()
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: "set-input; observe-input"}); err != nil {
+		t.Fatal(err)
+	}
+	if observed != "abc" {
+		t.Fatalf("observed input = %q, want abc", observed)
+	}
+}
+
+func TestCommandContextVariableAssignmentRollsBackOnBudgetFailure(t *testing.T) {
+	var mutationErr error
+	var exists bool
+	simulator := NewBuilder().
+		Limits(&Limits{MaxExecutionSteps: 20, MaxMemoryBytes: 512}).
+		Command("mutate", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+			mutationErr = command.AssignVariable("VALUE", &expand.Variable{
+				Set:  true,
+				Kind: expand.String,
+				Str:  strings.Repeat("x", 480),
+			}, false)
+			return &CommandResult{}, nil
+		}).
+		Command("observe", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+			_, exists, _ = command.State().Variable("VALUE")
+			return &CommandResult{}, nil
+		}).
+		Build()
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: "mutate; observe"}); err != nil {
+		t.Fatal(err)
+	}
+	if mutationErr == nil || !strings.Contains(mutationErr.Error(), "maximum materialized byte count 512 reached") {
+		t.Fatalf("mutation error = %v", mutationErr)
+	}
+	if exists {
+		t.Fatal("failed command-context mutation was committed")
 	}
 }
 

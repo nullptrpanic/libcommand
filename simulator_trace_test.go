@@ -36,6 +36,78 @@ func TestSimulateTraceReportsConcreteFinalPathOutput(t *testing.T) {
 	}
 }
 
+func TestSimulateTraceReactivatesLoopForEveryIteration(t *testing.T) {
+	tests := []*struct {
+		name        string
+		source      string
+		stdin       string
+		reactivated int
+	}{
+		{name: "word for", source: "for item in one two three; do :; done", reactivated: 2},
+		{name: "arithmetic for", source: "for ((i=0; i<3; i++)); do :; done", reactivated: 2},
+		{name: "while", source: "i=0; while ((i<3)); do ((i++)); done", reactivated: 2},
+		{name: "until", source: "i=0; until ((i>=3)); do ((i++)); done", reactivated: 2},
+		{name: "select", source: "select item in one; do break; done", stdin: "\n1\n", reactivated: 1},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			simulator := libcommand.NewBuilder().Build()
+			started := 0
+			reactivated := 0
+			err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{
+				Source: test.source,
+				Stdin:  []byte(test.stdin),
+			}, func(event *libcommand.TraceEvent) bool {
+				if event.Node == nil || event.Node.Kind != "loop" {
+					return true
+				}
+				switch event.Kind {
+				case libcommand.TraceStatementStarted:
+					started++
+				case libcommand.TraceStatementActivated:
+					reactivated++
+				}
+				return true
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if started != 1 || reactivated != test.reactivated {
+				t.Fatalf("loop events = %d started + %d reactivated, want 1 + %d", started, reactivated, test.reactivated)
+			}
+		})
+	}
+}
+
+func TestSimulateTraceStartsNestedConditionForEveryLoopIteration(t *testing.T) {
+	simulator := libcommand.NewBuilder().Build()
+	loopStarted := 0
+	loopActivated := 0
+	conditionStarted := 0
+	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{
+		Source: "for i in one two three; do if [[ $i = one ]]; then :; else :; fi; done",
+	}, func(event *libcommand.TraceEvent) bool {
+		if event.Node == nil {
+			return true
+		}
+		switch {
+		case event.Node.Kind == "loop" && event.Kind == libcommand.TraceStatementStarted:
+			loopStarted++
+		case event.Node.Kind == "loop" && event.Kind == libcommand.TraceStatementActivated:
+			loopActivated++
+		case event.Node.Kind == "condition" && !event.Node.Embedded && event.Kind == libcommand.TraceStatementStarted:
+			conditionStarted++
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loopStarted != 1 || loopActivated != 2 || conditionStarted != 3 {
+		t.Fatalf("control events = loop %d started + %d activated, condition %d started; want 1 + 2 and 3", loopStarted, loopActivated, conditionStarted)
+	}
+}
+
 func TestSimulateTraceMarksUnresolvedFinalPathOutput(t *testing.T) {
 	simulator := libcommand.NewBuilder().Build()
 	var result *libcommand.TracePathResult

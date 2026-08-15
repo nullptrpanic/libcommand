@@ -26,15 +26,18 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 		return &runtime.CommandResult{Stderr: []byte("getopts: usage: getopts optstring name [arg ...]\n"), ExitCode: 2}, nil
 	}
 	optionString, variableName := args[0], args[1]
-	if !syntax.ValidName(variableName) {
-		return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: `%s': not a valid identifier\n", variableName)), ExitCode: 1}, nil
-	}
-	if shell.Variable(variableName).ReadOnly {
-		return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: %s: readonly variable\n", variableName)), ExitCode: 1}, nil
+	finish := func(result *runtime.CommandResult) *runtime.CommandResult {
+		if !syntax.ValidName(variableName) {
+			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: `%s': not a valid identifier\n", variableName)), ExitCode: 1}
+		}
+		if shell.Variable(variableName).ReadOnly {
+			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: %s: readonly variable\n", variableName)), ExitCode: 1}
+		}
+		return result
 	}
 	if shell.VariableUnknown("OPTIND") {
 		markGetoptsStateUnknown(shell, variableName)
-		return shell.ResultUnknown(&runtime.CommandResult{}, false, true, true), nil
+		return finish(shell.ResultUnknown(&runtime.CommandResult{}, false, true, true)), nil
 	}
 
 	positional := args[2:]
@@ -47,10 +50,11 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 	}
 	state := loadGetoptsState(shell)
 	version := shell.VariableVersion("OPTIND")
-	if state.index != optind || state.optindVersion != version {
+	if state.optindVersion != version || !state.optindWriteFailed && state.index != optind {
 		state.index = optind
 		state.offset = 1
 		state.optindVersion = version
+		state.optindWriteFailed = false
 	}
 	if state.offset < 1 {
 		state.offset = 1
@@ -60,7 +64,7 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 		if state.index > len(positional) {
 			setGetoptsIndex(shell, state)
 			unsetGetoptsValue(shell, "OPTARG")
-			return &runtime.CommandResult{ExitCode: 1}, nil
+			return finish(&runtime.CommandResult{ExitCode: 1}), nil
 		}
 		token := positional[state.index-1]
 		if token == "--" {
@@ -68,12 +72,12 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 			state.offset = 1
 			setGetoptsIndex(shell, state)
 			unsetGetoptsValue(shell, "OPTARG")
-			return &runtime.CommandResult{ExitCode: 1}, nil
+			return finish(&runtime.CommandResult{ExitCode: 1}), nil
 		}
 		if len(token) < 2 || token[0] != '-' {
 			setGetoptsIndex(shell, state)
 			unsetGetoptsValue(shell, "OPTARG")
-			return &runtime.CommandResult{ExitCode: 1}, nil
+			return finish(&runtime.CommandResult{ExitCode: 1}), nil
 		}
 		if state.offset >= len(token) {
 			state.index++
@@ -91,10 +95,10 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 			setGetoptsValue(shell, variableName, "?")
 			if silent {
 				setGetoptsValue(shell, "OPTARG", string(option))
-				return &runtime.CommandResult{}, nil
+				return finish(&runtime.CommandResult{}), nil
 			}
 			unsetGetoptsValue(shell, "OPTARG")
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: illegal option -- %c\n", option))}, nil
+			return finish(&runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: illegal option -- %c\n", option))}), nil
 		}
 
 		requiresArgument := position+1 < len(trimmed) && trimmed[position+1] == ':'
@@ -102,7 +106,7 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 			finishGetoptsToken(shell, state, token)
 			setGetoptsValue(shell, variableName, string(option))
 			unsetGetoptsValue(shell, "OPTARG")
-			return &runtime.CommandResult{}, nil
+			return finish(&runtime.CommandResult{}), nil
 		}
 
 		argument := ""
@@ -122,38 +126,44 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 			if silent {
 				setGetoptsValue(shell, variableName, ":")
 				setGetoptsValue(shell, "OPTARG", string(option))
-				return &runtime.CommandResult{}, nil
+				return finish(&runtime.CommandResult{}), nil
 			}
 			setGetoptsValue(shell, variableName, "?")
 			unsetGetoptsValue(shell, "OPTARG")
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: option requires an argument -- %c\n", option))}, nil
+			return finish(&runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: option requires an argument -- %c\n", option))}), nil
 		}
 		setGetoptsIndex(shell, state)
 		setGetoptsValue(shell, variableName, string(option))
 		setGetoptsValue(shell, "OPTARG", argument)
-		return &runtime.CommandResult{}, nil
+		return finish(&runtime.CommandResult{}), nil
 	}
 }
 
 type getoptsState struct {
-	index         int
-	offset        int
-	optindVersion uint64
+	index             int
+	offset            int
+	optindVersion     uint64
+	optindWriteFailed bool
 }
 
 func loadGetoptsState(shell *runtime.CommandContext) *getoptsState {
 	values := shell.CommandState(getoptsStateName)
 	state := getoptsState{index: 1, offset: 1}
-	if len(values) == 3 {
+	if len(values) == 4 {
 		state.index = int(values[0])
 		state.offset = int(values[1])
 		state.optindVersion = values[2]
+		state.optindWriteFailed = values[3] != 0
 	}
 	return &state
 }
 
 func storeGetoptsState(shell *runtime.CommandContext, state *getoptsState) {
-	shell.SetCommandState(getoptsStateName, []uint64{uint64(state.index), uint64(state.offset), state.optindVersion})
+	writeFailed := uint64(0)
+	if state.optindWriteFailed {
+		writeFailed = 1
+	}
+	shell.SetCommandState(getoptsStateName, []uint64{uint64(state.index), uint64(state.offset), state.optindVersion, writeFailed})
 }
 
 func finishGetoptsToken(shell *runtime.CommandContext, state *getoptsState, token string) {
@@ -166,7 +176,7 @@ func finishGetoptsToken(shell *runtime.CommandContext, state *getoptsState, toke
 
 func setGetoptsIndex(shell *runtime.CommandContext, state *getoptsState) {
 	value := &expand.Variable{Set: true, Kind: expand.String, Str: strconv.Itoa(state.index)}
-	_ = shell.AssignVariable("OPTIND", value, false)
+	state.optindWriteFailed = shell.AssignVariable("OPTIND", value, false) != nil
 	state.optindVersion = shell.VariableVersion("OPTIND")
 	storeGetoptsState(shell, state)
 }

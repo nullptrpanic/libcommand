@@ -646,6 +646,9 @@ func (e *ExecutionContext) checkRepeatedPathMaterialization(path *pathResult, co
 
 func (e *ExecutionContext) retainedAuxiliaryBytes(maximum int) (int, bool) {
 	total, ok := materialize.Add(0, e.variableRollbackBytes, maximum)
+	if ok {
+		total, ok = materialize.Add(total, e.nestedShellBytes, maximum)
+	}
 	if ok && e.candidates != nil {
 		total, ok = materialize.Add(total, e.candidates.dynamicBytes, maximum)
 	}

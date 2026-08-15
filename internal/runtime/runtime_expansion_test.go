@@ -88,7 +88,7 @@ func TestWordMayMutateVariables(t *testing.T) {
 		{name: "literal", word: `literal`},
 		{name: "parameter read", word: `$value`},
 		{name: "parameter assignment", word: `${value:=default}`, mutate: true},
-		{name: "arithmetic read", word: `$((value + 1))`},
+		{name: "arithmetic read", word: `$((value + 1))`, mutate: true},
 		{name: "arithmetic assignment", word: `$((value += 1))`, mutate: true},
 		{name: "arithmetic increment", word: `$((value++))`, mutate: true},
 		{name: "array index increment", word: `${values[index++]}`, mutate: true},
@@ -149,7 +149,7 @@ esac`
 		script string
 		want   int
 	}{
-		{"arithmetic condition", `for ((i=0; i<2 && $(probe); i++)); do :; done`, 3},
+		{"arithmetic condition", `for ((i=0; i<2 && $(probe); i++)); do :; done`, 2},
 		{"arithmetic post", `for ((i=0; i<2; i+=$(probe))); do :; done`, 2},
 		{"unknown arithmetic command", `((RANDOM + $(probe)))`, 1},
 	} {

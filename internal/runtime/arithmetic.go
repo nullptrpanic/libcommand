@@ -48,11 +48,389 @@ func (e *ExecutionContext) arithmeticValue(s *State, expression syntax.ArithmExp
 	}
 	defer restoreCollections()
 	config.Env = environment
-	value, err = expand.Arithm(config, expression)
+	value, err = evaluateBashArithmetic(config, environment, expression)
 	if environment.err != nil {
 		return 0, environment.err
 	}
 	return value, err
+}
+
+type bashArithmeticEvaluator struct {
+	config      *expand.Config
+	environment *bashArithmeticEnvironment
+	resolving   map[string]struct{}
+}
+
+func evaluateBashArithmetic(config *expand.Config, environment *bashArithmeticEnvironment, expression syntax.ArithmExpr) (int, error) {
+	evaluator := &bashArithmeticEvaluator{
+		config:      config,
+		environment: environment,
+		resolving:   make(map[string]struct{}),
+	}
+	value, err := evaluator.evaluate(expression)
+	return int(value), err
+}
+
+func (evaluator *bashArithmeticEvaluator) evaluate(expression syntax.ArithmExpr) (int64, error) {
+	if err := evaluator.environment.ExecutionContext.ctx.Err(); err != nil {
+		return 0, err
+	}
+	switch expression := expression.(type) {
+	case *syntax.Word:
+		value, err := expand.Literal(evaluator.config, expression)
+		if err != nil {
+			return 0, err
+		}
+		return evaluator.evaluateText(value)
+	case *syntax.ParenArithm:
+		return evaluator.evaluate(expression.X)
+	case *syntax.UnaryArithm:
+		return evaluator.evaluateUnary(expression)
+	case *syntax.BinaryArithm:
+		return evaluator.evaluateBinary(expression)
+	case *syntax.FlagsArithm:
+		return 0, errors.New("unsupported arithmetic flags")
+	default:
+		return 0, fmt.Errorf("unsupported arithmetic expression %T", expression)
+	}
+}
+
+func (evaluator *bashArithmeticEvaluator) evaluateText(value string) (int64, error) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return 0, nil
+	}
+	if literal, recognized, err := parseBashIntegerLiteral(value); recognized {
+		return literal, err
+	}
+	_, syntheticReference := evaluator.environment.references[value]
+	_, _, arrayReference := splitArrayReferenceName(value)
+	if syntax.ValidName(value) || syntheticReference || arrayReference {
+		return evaluator.evaluateReference(value)
+	}
+	expression, err := ParseArithmetic(evaluator.environment.ExecutionContext.ctx, value)
+	if err != nil {
+		return 0, err
+	}
+	return evaluator.evaluate(expression)
+}
+
+func (evaluator *bashArithmeticEvaluator) evaluateReference(name string) (int64, error) {
+	if _, resolving := evaluator.resolving[name]; resolving {
+		return 0, fmt.Errorf("expression recursion level exceeded for %s", name)
+	}
+	if len(evaluator.resolving) >= 1024 {
+		return 0, errors.New("arithmetic expression recursion limit reached")
+	}
+	evaluator.resolving[name] = struct{}{}
+	defer delete(evaluator.resolving, name)
+	value := evaluator.environment.Get(name)
+	if evaluator.environment.err != nil {
+		return 0, evaluator.environment.err
+	}
+	if !value.IsSet() {
+		return 0, nil
+	}
+	return evaluator.evaluateText(value.String())
+}
+
+func (evaluator *bashArithmeticEvaluator) evaluateUnary(expression *syntax.UnaryArithm) (int64, error) {
+	if expression.Op == syntax.Inc || expression.Op == syntax.Dec {
+		name, err := evaluator.assignmentName(expression.X)
+		if err != nil {
+			return 0, err
+		}
+		old, err := evaluator.evaluateReference(name)
+		if err != nil {
+			return 0, err
+		}
+		value := old
+		if expression.Op == syntax.Inc {
+			value++
+		} else {
+			value--
+		}
+		if err := evaluator.assign(name, value); err != nil {
+			return 0, err
+		}
+		if expression.Post {
+			return old, nil
+		}
+		return value, nil
+	}
+	value, err := evaluator.evaluate(expression.X)
+	if err != nil {
+		return 0, err
+	}
+	switch expression.Op {
+	case syntax.Not:
+		return arithmeticBoolean(value == 0), nil
+	case syntax.BitNegation:
+		return ^value, nil
+	case syntax.Plus:
+		return value, nil
+	case syntax.Minus:
+		return -value, nil
+	default:
+		return 0, fmt.Errorf("unsupported unary arithmetic operator %q", expression.Op)
+	}
+}
+
+func (evaluator *bashArithmeticEvaluator) evaluateBinary(expression *syntax.BinaryArithm) (int64, error) {
+	switch expression.Op {
+	case syntax.TernQuest:
+		condition, err := evaluator.evaluate(expression.X)
+		if err != nil {
+			return 0, err
+		}
+		branches, ok := expression.Y.(*syntax.BinaryArithm)
+		if !ok || branches.Op != syntax.TernColon {
+			return 0, errors.New("invalid ternary arithmetic expression")
+		}
+		if condition != 0 {
+			return evaluator.evaluate(branches.X)
+		}
+		return evaluator.evaluate(branches.Y)
+	case syntax.AndArit:
+		left, err := evaluator.evaluate(expression.X)
+		if err != nil || left == 0 {
+			return 0, err
+		}
+		right, err := evaluator.evaluate(expression.Y)
+		return arithmeticBoolean(right != 0), err
+	case syntax.OrArit:
+		left, err := evaluator.evaluate(expression.X)
+		if err != nil {
+			return 0, err
+		}
+		if left != 0 {
+			return 1, nil
+		}
+		right, err := evaluator.evaluate(expression.Y)
+		return arithmeticBoolean(right != 0), err
+	case syntax.Comma:
+		if _, err := evaluator.evaluate(expression.X); err != nil {
+			return 0, err
+		}
+		return evaluator.evaluate(expression.Y)
+	case syntax.Assgn, syntax.AddAssgn, syntax.SubAssgn, syntax.MulAssgn,
+		syntax.QuoAssgn, syntax.RemAssgn, syntax.AndAssgn, syntax.OrAssgn,
+		syntax.XorAssgn, syntax.ShlAssgn, syntax.ShrAssgn, syntax.AndBoolAssgn,
+		syntax.OrBoolAssgn, syntax.XorBoolAssgn, syntax.PowAssgn:
+		return evaluator.evaluateAssignment(expression)
+	}
+	left, err := evaluator.evaluate(expression.X)
+	if err != nil {
+		return 0, err
+	}
+	right, err := evaluator.evaluate(expression.Y)
+	if err != nil {
+		return 0, err
+	}
+	return applyBashArithmeticOperator(expression.Op, left, right)
+}
+
+func (evaluator *bashArithmeticEvaluator) evaluateAssignment(expression *syntax.BinaryArithm) (int64, error) {
+	name, err := evaluator.assignmentName(expression.X)
+	if err != nil {
+		return 0, err
+	}
+	value := int64(0)
+	if expression.Op == syntax.Assgn {
+		value, err = evaluator.evaluate(expression.Y)
+	} else {
+		left, leftErr := evaluator.evaluateReference(name)
+		if leftErr != nil {
+			return 0, leftErr
+		}
+		right, rightErr := evaluator.evaluate(expression.Y)
+		if rightErr != nil {
+			return 0, rightErr
+		}
+		operator, ok := arithmeticAssignmentOperator(expression.Op)
+		if !ok {
+			return 0, fmt.Errorf("unsupported arithmetic assignment operator %q", expression.Op)
+		}
+		value, err = applyBashArithmeticOperator(operator, left, right)
+	}
+	if err != nil {
+		return 0, err
+	}
+	if err := evaluator.assign(name, value); err != nil {
+		return 0, err
+	}
+	return value, nil
+}
+
+func (evaluator *bashArithmeticEvaluator) assignmentName(expression syntax.ArithmExpr) (string, error) {
+	word, ok := expression.(*syntax.Word)
+	if !ok {
+		return "", errors.New("arithmetic assignment target is not a variable")
+	}
+	name := word.Lit()
+	if name == "" {
+		return "", errors.New("arithmetic assignment target is empty")
+	}
+	return name, nil
+}
+
+func (evaluator *bashArithmeticEvaluator) assign(name string, value int64) error {
+	return evaluator.environment.Set(name, expand.Variable{
+		Set:  true,
+		Kind: expand.String,
+		Str:  strconv.FormatInt(value, 10),
+	})
+}
+
+func arithmeticAssignmentOperator(operator syntax.BinAritOperator) (syntax.BinAritOperator, bool) {
+	switch operator {
+	case syntax.AddAssgn:
+		return syntax.Add, true
+	case syntax.SubAssgn:
+		return syntax.Sub, true
+	case syntax.MulAssgn:
+		return syntax.Mul, true
+	case syntax.QuoAssgn:
+		return syntax.Quo, true
+	case syntax.RemAssgn:
+		return syntax.Rem, true
+	case syntax.AndAssgn:
+		return syntax.And, true
+	case syntax.OrAssgn:
+		return syntax.Or, true
+	case syntax.XorAssgn:
+		return syntax.Xor, true
+	case syntax.ShlAssgn:
+		return syntax.Shl, true
+	case syntax.ShrAssgn:
+		return syntax.Shr, true
+	case syntax.AndBoolAssgn:
+		return syntax.AndArit, true
+	case syntax.OrBoolAssgn:
+		return syntax.OrArit, true
+	case syntax.XorBoolAssgn:
+		return syntax.XorBool, true
+	case syntax.PowAssgn:
+		return syntax.Pow, true
+	default:
+		return 0, false
+	}
+}
+
+func applyBashArithmeticOperator(operator syntax.BinAritOperator, left, right int64) (int64, error) {
+	switch operator {
+	case syntax.Add:
+		return left + right, nil
+	case syntax.Sub:
+		return left - right, nil
+	case syntax.Mul:
+		return left * right, nil
+	case syntax.Quo:
+		if right == 0 {
+			return 0, errors.New("division by zero")
+		}
+		return left / right, nil
+	case syntax.Rem:
+		if right == 0 {
+			return 0, errors.New("division by zero")
+		}
+		return left % right, nil
+	case syntax.Pow:
+		if right < 0 {
+			return 0, errors.New("exponent less than 0")
+		}
+		value := int64(1)
+		for right != 0 {
+			if right&1 != 0 {
+				value *= left
+			}
+			right >>= 1
+			left *= left
+		}
+		return value, nil
+	case syntax.Eql:
+		return arithmeticBoolean(left == right), nil
+	case syntax.Gtr:
+		return arithmeticBoolean(left > right), nil
+	case syntax.Lss:
+		return arithmeticBoolean(left < right), nil
+	case syntax.Neq:
+		return arithmeticBoolean(left != right), nil
+	case syntax.Leq:
+		return arithmeticBoolean(left <= right), nil
+	case syntax.Geq:
+		return arithmeticBoolean(left >= right), nil
+	case syntax.And:
+		return left & right, nil
+	case syntax.Or:
+		return left | right, nil
+	case syntax.Xor:
+		return left ^ right, nil
+	case syntax.Shr:
+		return left >> (uint64(right) & 63), nil
+	case syntax.Shl:
+		return left << (uint64(right) & 63), nil
+	case syntax.AndArit:
+		return arithmeticBoolean(left != 0 && right != 0), nil
+	case syntax.OrArit:
+		return arithmeticBoolean(left != 0 || right != 0), nil
+	case syntax.XorBool:
+		return arithmeticBoolean(left != 0 != (right != 0)), nil
+	default:
+		return 0, fmt.Errorf("unsupported binary arithmetic operator %q", operator)
+	}
+}
+
+func arithmeticBoolean(value bool) int64 {
+	if value {
+		return 1
+	}
+	return 0
+}
+
+type arithmeticExpansionRewrite struct {
+	expansion  *syntax.ArithmExp
+	expression syntax.ArithmExpr
+}
+
+func (e *ExecutionContext) prepareArithmeticExpansions(s *State, word *syntax.Word) (func(), error) {
+	rewrites := make([]*arithmeticExpansionRewrite, 0)
+	var evaluationErr error
+	syntax.Walk(word, func(node syntax.Node) bool {
+		if evaluationErr != nil {
+			return false
+		}
+		if _, substitution := node.(*syntax.CmdSubst); substitution {
+			return false
+		}
+		expansion, ok := node.(*syntax.ArithmExp)
+		if !ok {
+			return true
+		}
+		value, err := e.arithmeticValue(s, expansion.X)
+		if err != nil {
+			evaluationErr = err
+			return false
+		}
+		rewrites = append(rewrites, &arithmeticExpansionRewrite{expansion: expansion, expression: expansion.X})
+		expansion.X = &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{
+			ValuePos: expansion.X.Pos(),
+			ValueEnd: expansion.X.End(),
+			Value:    strconv.Itoa(value),
+		}}}
+		return false
+	})
+	restore := func() {
+		for index := len(rewrites) - 1; index >= 0; index-- {
+			rewrite := rewrites[index]
+			rewrite.expansion.X = rewrite.expression
+		}
+	}
+	if evaluationErr != nil {
+		restore()
+		return noopRestore, evaluationErr
+	}
+	return restore, nil
 }
 
 type bashArithmeticEnvironment struct {

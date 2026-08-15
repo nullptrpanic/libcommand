@@ -142,9 +142,6 @@ func (e *ExecutionContext) expandFields(s *State, words []*syntax.Word, allowHos
 		if err := normalizeWordArithmeticLiterals(word); err != nil {
 			return nil, err
 		}
-		if err := e.checkWordMaterialization(s, word, materializedBytes); err != nil {
-			return nil, err
-		}
 		if err := validateUnknownParameterExpansions(s, word); err != nil {
 			return nil, err
 		}
@@ -160,9 +157,23 @@ func (e *ExecutionContext) expandFields(s *State, words []*syntax.Word, allowHos
 		}
 		overrides, restoreParameters, prepareErr := e.prepareParameterExpansions(s, word)
 		if prepareErr != nil {
+			restore()
 			return nil, prepareErr
 		}
+		restoreArithmetic, arithmeticErr := e.prepareArithmeticExpansions(s, word)
+		if arithmeticErr != nil {
+			restoreParameters()
+			restore()
+			return nil, arithmeticErr
+		}
+		if err := e.checkWordMaterialization(s, word, materializedBytes); err != nil {
+			restoreArithmetic()
+			restoreParameters()
+			restore()
+			return nil, err
+		}
 		expanded, nextMaterializedBytes, expandErr := e.expandFieldsWithinLimit(e.expansionConfigWithDirectoryCache(s, overrides, directoryCache), word, materializedBytes)
+		restoreArithmetic()
 		restoreParameters()
 		restore()
 		if expandErr != nil {
@@ -562,9 +573,6 @@ func (e *ExecutionContext) expandWordValue(s *State, word *syntax.Word, expandVa
 	if err := validateUnknownParameterExpansions(s, word); err != nil {
 		return "", err
 	}
-	if err := e.checkWordMaterialization(s, word, 0); err != nil {
-		return "", err
-	}
 	restore := maskInactiveParameterWords(s, word)
 	defer restore()
 	originalVars := s.vars
@@ -579,6 +587,14 @@ func (e *ExecutionContext) expandWordValue(s *State, word *syntax.Word, expandVa
 		return "", prepareErr
 	}
 	defer restoreParameters()
+	restoreArithmetic, arithmeticErr := e.prepareArithmeticExpansions(s, word)
+	if arithmeticErr != nil {
+		return "", arithmeticErr
+	}
+	defer restoreArithmetic()
+	if err := e.checkWordMaterialization(s, word, 0); err != nil {
+		return "", err
+	}
 	value, err = expandValue(e.expansionConfigWithOverrides(s, overrides), word)
 	return value, err
 }

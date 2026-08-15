@@ -71,11 +71,17 @@ func TestMemoryFSAppendCertainty(t *testing.T) {
 	}
 
 	fs := newMemoryFS(defaultMaxMemoryBytes)
-	if err := fs.writeValue("/dev/null", []byte("ignored"), false, true); err != nil {
+	if err := fs.writeValue("/dev/../dev/null", []byte("ignored"), false, true); err != nil {
 		t.Fatal(err)
 	}
 	if contents, unknown := fs.readValue("/dev/null"); len(contents) != 0 || unknown {
 		t.Fatalf("/dev/null = %q, %t", contents, unknown)
+	}
+	if kind := fs.pathKind("/dev/../dev/null"); kind != PathDevice {
+		t.Fatalf("/dev/null kind = %d, want PathDevice", kind)
+	}
+	if err := fs.ensureDir("/dev/null"); err == nil {
+		t.Fatal("creating a directory over /dev/null succeeded")
 	}
 }
 

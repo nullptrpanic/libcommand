@@ -123,9 +123,6 @@ func (e *ExecutionContext) expandCallArguments(s *State, words []*syntax.Word) (
 		if err := normalizeWordArithmeticLiterals(word); err != nil {
 			return nil, err
 		}
-		if err := e.checkWordMaterialization(s, word, materializedBytes); err != nil {
-			return nil, err
-		}
 		certainty := wordCertainty(s, word)
 		if !certainty.dataUnknown() {
 			if err := validateUnknownParameterExpansions(s, word); err != nil {
@@ -138,13 +135,27 @@ func (e *ExecutionContext) expandCallArguments(s *State, words []*syntax.Word) (
 		restore := maskInactiveParameterWords(s, word)
 		overrides, restoreParameters, prepareErr := e.prepareParameterExpansions(s, word)
 		if prepareErr != nil {
+			restore()
 			return nil, prepareErr
 		}
 		if !transactionStarted && wordMayMutateVariables(word) {
 			s.vars = s.vars.clone()
 			transactionStarted = true
 		}
+		restoreArithmetic, arithmeticErr := e.prepareArithmeticExpansions(s, word)
+		if arithmeticErr != nil {
+			restoreParameters()
+			restore()
+			return nil, arithmeticErr
+		}
+		if err := e.checkWordMaterialization(s, word, materializedBytes); err != nil {
+			restoreArithmetic()
+			restoreParameters()
+			restore()
+			return nil, err
+		}
 		expanded, nextMaterializedBytes, expandErr := e.expandFieldsWithinLimit(e.expansionConfigWithDirectoryCache(s, overrides, directoryCache), word, materializedBytes)
+		restoreArithmetic()
 		restoreParameters()
 		restore()
 		if expandErr != nil {

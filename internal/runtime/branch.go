@@ -283,6 +283,9 @@ func (e *ExecutionContext) resumeCaseItemTruth(s *State, subject string, subject
 		if result, resultErr, incomplete := e.incompleteFromEvaluationError(s, err, sourceLocation(item)); incomplete {
 			status = result.status
 			err = resultErr
+		} else if err != nil && s.issue == err {
+			status = StatusIncomplete
+			err = nil
 		} else if isUnknownValueError(err) {
 			result := e.unresolved(s, err.Error(), sourceLocation(item))
 			status = result.status
@@ -309,6 +312,9 @@ func (e *ExecutionContext) resumeCaseItemTruth(s *State, subject string, subject
 func (e *ExecutionContext) caseItemTruth(s *State, subject string, subjectUnknown bool, item *syntax.CaseItem) (truthValue, error) {
 	unknown := false
 	for _, patternWord := range item.Patterns {
+		if status := e.reserveExecutionSteps(s, 1, sourceLocation(patternWord)); status != StatusCompleted {
+			return truthUnknown, s.issue
+		}
 		candidate, err := e.casePattern(s, patternWord)
 		if err != nil {
 			if expansionRequested(err) {
@@ -335,7 +341,16 @@ func (e *ExecutionContext) caseItemTruth(s *State, subject string, subjectUnknow
 			unknown = true
 			continue
 		}
-		if regexp.MustCompile(regularExpression).MatchString(subject) {
+		compiled, err := regexp.Compile(regularExpression)
+		if err != nil {
+			unknown = true
+			continue
+		}
+		matched := compiled.MatchString(subject)
+		if err := e.ctx.Err(); err != nil {
+			return truthUnknown, err
+		}
+		if matched {
 			return truthTrue, nil
 		}
 	}

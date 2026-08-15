@@ -120,7 +120,7 @@ func testTruth(shell *runtime.CommandContext, args []string) (testTruthValue, *t
 
 func isFileTestOperator(name string) bool {
 	switch name {
-	case "-e", "-f", "-r", "-w", "-x", "-d", "-s":
+	case "-e", "-f", "-c", "-r", "-w", "-x", "-d", "-s":
 		return true
 	default:
 		return false
@@ -130,6 +130,14 @@ func isFileTestOperator(name string) bool {
 func fileTestTruth(shell *runtime.CommandContext, operator, name string) testTruthValue {
 	resolved := shell.ResolvePath(name)
 	kind := shell.PathKind(resolved)
+	if kind == runtime.PathDevice {
+		switch operator {
+		case "-e", "-c", "-r", "-w":
+			return testTrue
+		default:
+			return testFalse
+		}
+	}
 	if kind == runtime.PathFile {
 		switch operator {
 		case "-d", "-x":

@@ -174,6 +174,13 @@ func TestSimulatorReturnsInputAndExecutionErrors(t *testing.T) {
 	}
 }
 
+func TestSimulatorRejectsNilRequest(t *testing.T) {
+	err := NewBuilder().Build().Simulate(context.Background(), nil)
+	if err == nil || !strings.Contains(err.Error(), "simulation request is nil") {
+		t.Fatalf("Simulate(nil) error = %v", err)
+	}
+}
+
 func TestSimulatorCancellationPrecedesRequestMaterialization(t *testing.T) {
 	simulator := mustBuildSimulator(t, "record", successfulHandler())
 	ctx, cancel := context.WithCancel(context.Background())

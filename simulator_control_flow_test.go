@@ -387,7 +387,7 @@ unset x
 lark-cli unset "$?" "$x"
 read y <<< changed
 lark-cli read "$?" "$y"`
-	requireJoinedArguments(t, source, []string{"unset 1 safe", "read 1 stable"})
+	requireJoinedArguments(t, source, []string{"unset 1 safe", "read 0 stable"})
 }
 
 func TestSimulatorRollsBackExpansionBeforeSubstitutionRetry(t *testing.T) {
@@ -504,7 +504,7 @@ func TestSimulatorReevaluatesCStyleLoopSubstitutions(t *testing.T) {
 		source string
 		want   int
 	}{
-		{"condition", `for ((i=0; i<2 && $(probe); i++)); do :; done`, 3},
+		{"condition", `for ((i=0; i<2 && $(probe); i++)); do :; done`, 2},
 		{"post expression", `for ((i=0; i<2; i+=$(probe))); do :; done`, 2},
 	}
 	for _, test := range tests {

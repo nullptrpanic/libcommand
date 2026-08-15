@@ -31,6 +31,9 @@ func (s *Simulator) simulate(ctx context.Context, request *SimulationRequest, tr
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	if request == nil {
+		return fmt.Errorf("simulation request is nil")
+	}
 	limits := limitsWithDefaults(s.limits)
 	if err := checkUntrustedRequestMaterialization(request, limits.MaxMemoryBytes); err != nil {
 		return err

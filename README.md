@@ -368,7 +368,9 @@ runtime path construction:
 
 State mutations are path-local, copy-on-write, and checked against the logical
 materialization budget. Commands must not retain `CommandContext` or `State`
-pointers after returning.
+pointers after returning. Input byte slices returned by `Input` or
+`ConsumeInput` are caller-owned copies, and `SetInput` also copies its input,
+so a command cannot mutate another retained path through a shared buffer.
 
 Result behavior is explicit:
 
@@ -390,7 +392,7 @@ Each simulation has two independent default limits:
 
 | Limit | Default | Scope |
 | --- | ---: | --- |
-| `MaxExecutionSteps` | 10,000 | Dynamic statements, command calls, and additional successors created during path exploration. |
+| `MaxExecutionSteps` | 10,000 | Dynamic statements, command calls, case-pattern evaluations, and additional successors created during path exploration. |
 | `MaxMemoryBytes` | 2 MiB | Initial request and conservative logical materialization retained by the simulator. |
 
 ```mermaid
@@ -444,15 +446,21 @@ flowchart LR
 
 Observers execute on the simulation goroutine. A slow or blocking observer
 therefore adds latency to traced simulations. Returning `false` disables later
-events without stopping Shell evaluation. `TraceNode.Embedded` identifies a
-nested evaluation detail such as a condition command, command substitution, or
-pipeline operand. It is presentation metadata only: node IDs, execution events,
-and Shell behavior are unchanged, so clients may fold it in an AST view while
-retaining it in an execution-oriented view. `TraceNode.FlowGroup` identifies
-sequential bodies versus alternative bodies under one parent for layered graph
-layout. `TraceNode.FlowCanSkip` marks a conditional container that can continue
-without entering any visible body, such as an `if` without `else`. Both fields
-are presentation metadata and have no evaluation semantics.
+events without stopping Shell evaluation. `TraceStatementActivated` reports a
+new control-flow visit to a statement whose outer evaluation is still active;
+loops emit it on every iteration after the first so consumers can replay loop
+headers without inventing nested start/finish pairs. `TraceNode.Embedded`
+identifies a nested evaluation detail such as a condition command, command
+substitution, or pipeline operand. It is presentation metadata only: node IDs,
+execution events, and Shell behavior are unchanged, so clients may fold it in
+an AST view while retaining it in an execution-oriented view.
+`TraceNode.FlowGroup` identifies sequential bodies versus alternative bodies
+under one parent for layered graph layout. `TraceNode.FlowCanSkip` marks a
+control-flow container that can continue without entering any visible body,
+such as an `if` without `else` or a loop with zero iterations.
+`FlowCommand`, `FlowFunction`, `FlowGroupExit`, and `FlowGroupDefault` describe
+direct calls, function declarations, and `case` control flow. These fields are
+presentation metadata and have no evaluation semantics.
 
 The browser Playground compiles the simulator to WebAssembly and runs it in a
 disposable Web Worker. It provides separate AST and live Runtime views,
@@ -461,9 +469,10 @@ memory snapshots.
 
 ### Playground preview
 
-**Live Runtime flow.** Expanded commands appear in execution order while the
-active node, graph position, logical memory, and node inspector follow the
-simulation.
+**Live Runtime flow.** Actual loop and condition visits appear alongside
+expanded commands in execution order. Re-entered control statements are shown
+and highlighted again while graph position, logical memory, and the node
+inspector follow the simulation.
 
 ![Playground building a live Runtime command flow and inspecting command output](assets/playground/runtime-flow.gif)
 

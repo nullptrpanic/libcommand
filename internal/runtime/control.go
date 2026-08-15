@@ -24,6 +24,7 @@ type ExecutionContext struct {
 	stop                  bool
 	variableRollbacks     []*variableRollback
 	variableRollbackBytes int
+	nestedShellBytes      int
 	trace                 *executionTrace
 }
 

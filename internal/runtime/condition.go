@@ -48,7 +48,7 @@ func (e *ExecutionContext) testTruth(s *State, expression syntax.TestExpr) (trut
 			return truthFromBool(value != ""), nil
 		case syntax.TsVarSet:
 			return e.variableSetTruth(s, value)
-		case syntax.TsExists, syntax.TsRegFile, syntax.TsDirect, syntax.TsRead, syntax.TsWrite, syntax.TsExec, syntax.TsNoEmpty:
+		case syntax.TsExists, syntax.TsRegFile, syntax.TsDirect, syntax.TsCharSp, syntax.TsRead, syntax.TsWrite, syntax.TsExec, syntax.TsNoEmpty:
 			return e.virtualFileTestTruth(s, expression.Op, value)
 		default:
 			return truthUnknown, nil
@@ -224,6 +224,16 @@ func (e *ExecutionContext) arithmeticTestError(err error) error {
 func (e *ExecutionContext) virtualFileTestTruth(s *State, operator syntax.UnTestOperator, name string) (truthValue, error) {
 	directory, _ := s.dir.Data()
 	resolved := s.fs.resolve(directory, name)
+	if s.fs.pathKind(resolved) == PathDevice {
+		switch operator {
+		case syntax.TsExists, syntax.TsCharSp, syntax.TsRead, syntax.TsWrite:
+			return truthTrue, nil
+		case syntax.TsRegFile, syntax.TsDirect, syntax.TsNoEmpty, syntax.TsExec:
+			return truthFalse, nil
+		default:
+			return truthUnknown, nil
+		}
+	}
 	if contents, exists := s.fs.files[resolved]; exists {
 		switch operator {
 		case syntax.TsDirect, syntax.TsExec:
@@ -284,6 +294,9 @@ func wordMayMutateVariables(word *syntax.Word) bool {
 	syntax.Walk(word, func(node syntax.Node) bool {
 		switch node := node.(type) {
 		case *syntax.CmdSubst, *syntax.ProcSubst:
+			return false
+		case *syntax.ArithmExp:
+			mutates = true
 			return false
 		case *syntax.ParamExp:
 			if node.Exp != nil && (node.Exp.Op == syntax.AssignUnset || node.Exp.Op == syntax.AssignUnsetOrNull) {
