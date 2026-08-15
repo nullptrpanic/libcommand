@@ -17,6 +17,7 @@ const (
 	TraceSimulationStarted  TraceEventKind = "simulation_started"
 	TraceNodeDiscovered     TraceEventKind = "node_discovered"
 	TraceStatementStarted   TraceEventKind = "statement_started"
+	TraceStatementActivated TraceEventKind = "statement_activated"
 	TraceStatementFinished  TraceEventKind = "statement_finished"
 	TracePathForked         TraceEventKind = "path_forked"
 	TraceCommandStarted     TraceEventKind = "command_started"
@@ -52,8 +53,22 @@ type TraceNode struct {
 	FlowGroup uint32 `json:"flowGroup,omitempty"`
 	// FlowCanSkip marks a statement whose control flow can reach the following
 	// statement without entering any visible child group, such as an if without
-	// an else or a case with no matching pattern. It does not affect evaluation.
+	// an else, a case with no matching pattern, or a loop with zero iterations.
+	// It does not affect evaluation.
 	FlowCanSkip bool `json:"flowCanSkip,omitempty"`
+	// FlowCommand is the literal command name of a simple command. Presentation
+	// clients use it to distinguish Shell control transfers and direct function
+	// calls without attempting to parse the display snippet.
+	FlowCommand string `json:"flowCommand,omitempty"`
+	// FlowFunction is the declared function name. A function body is syntax
+	// owned by its declaration, but is only entered when this name is called.
+	FlowFunction string `json:"flowFunction,omitempty"`
+	// FlowGroupExit preserves the operator terminating a case item. It is copied
+	// to each visible statement in that item so clients can reconstruct ;& and
+	// ;;& flow after embedded statements have been folded.
+	FlowGroupExit string `json:"flowGroupExit,omitempty"`
+	// FlowGroupDefault marks a case item containing an unquoted literal *.
+	FlowGroupDefault bool `json:"flowGroupDefault,omitempty"`
 }
 
 // TraceMemory is a logical retained-size snapshot. It describes the same
@@ -234,27 +249,31 @@ func (trace *executionTrace) discover(file *syntax.File, source, name string, pa
 		return
 	}
 	for _, statement := range file.Stmts {
-		trace.discoverStatement(statement, source, name, parentID, false, 0)
+		trace.discoverStatement(statement, source, name, parentID, false, 0, "", false)
 		if trace.observer == nil {
 			return
 		}
 	}
 }
 
-func (trace *executionTrace) discoverStatement(statement *syntax.Stmt, source, name string, parentID uint64, embedded bool, flowGroup uint32) {
+func (trace *executionTrace) discoverStatement(statement *syntax.Stmt, source, name string, parentID uint64, embedded bool, flowGroup uint32, flowGroupExit string, flowGroupDefault bool) {
 	if statement == nil || trace.nodeIDs[statement] != 0 {
 		return
 	}
 	trace.nextNodeID++
 	node := &TraceNode{
-		ID:          trace.nextNodeID,
-		ParentID:    parentID,
-		Kind:        traceStatementKind(statement),
-		Snippet:     traceSnippet(source, statement),
-		Source:      traceSource(name, statement),
-		Embedded:    embedded,
-		FlowGroup:   flowGroup,
-		FlowCanSkip: traceFlowCanSkip(statement),
+		ID:               trace.nextNodeID,
+		ParentID:         parentID,
+		Kind:             traceStatementKind(statement),
+		Snippet:          traceSnippet(source, statement),
+		Source:           traceSource(name, statement),
+		Embedded:         embedded,
+		FlowGroup:        flowGroup,
+		FlowCanSkip:      traceFlowCanSkip(statement),
+		FlowCommand:      traceFlowCommand(statement),
+		FlowFunction:     traceFlowFunction(statement),
+		FlowGroupExit:    flowGroupExit,
+		FlowGroupDefault: flowGroupDefault,
 	}
 	trace.nodeIDs[statement] = node.ID
 	trace.nodes[node.ID] = node
@@ -272,8 +291,11 @@ func (trace *executionTrace) discoverStatement(statement *syntax.Stmt, source, n
 			return true
 		}
 		if childStatement, ok := child.(*syntax.Stmt); ok {
-			group, visible := visibleChildren[childStatement]
-			trace.discoverStatement(childStatement, source, name, node.ID, !visible, group)
+			flow, visible := visibleChildren[childStatement]
+			if flow == nil {
+				flow = &traceChildFlow{}
+			}
+			trace.discoverStatement(childStatement, source, name, node.ID, !visible, flow.group, flow.groupExit, flow.groupDefault)
 			return false
 		}
 		trace.nodeIDs[child] = node.ID
@@ -286,12 +308,18 @@ func (trace *executionTrace) discoverStatement(statement *syntax.Stmt, source, n
 // of evaluating their parent, such as conditions, substitutions, and pipeline
 // operands. They stay in the trace for runtime correlation but are marked as
 // embedded so presentation clients may fold them.
-func traceVisibleChildGroups(statement *syntax.Stmt) map[*syntax.Stmt]uint32 {
-	children := make(map[*syntax.Stmt]uint32)
-	add := func(group uint32, statements ...*syntax.Stmt) {
+type traceChildFlow struct {
+	group        uint32
+	groupExit    string
+	groupDefault bool
+}
+
+func traceVisibleChildGroups(statement *syntax.Stmt) map[*syntax.Stmt]*traceChildFlow {
+	children := make(map[*syntax.Stmt]*traceChildFlow)
+	add := func(group uint32, groupExit string, groupDefault bool, statements ...*syntax.Stmt) {
 		for _, child := range statements {
 			if child != nil {
-				children[child] = group
+				children[child] = &traceChildFlow{group: group, groupExit: groupExit, groupDefault: groupDefault}
 			}
 		}
 	}
@@ -300,27 +328,27 @@ func traceVisibleChildGroups(statement *syntax.Stmt) map[*syntax.Stmt]uint32 {
 	case *syntax.IfClause:
 		var group uint32
 		for clause := command; clause != nil; clause = clause.Else {
-			add(group, clause.Then...)
+			add(group, "", false, clause.Then...)
 			group++
 		}
 	case *syntax.WhileClause:
-		add(0, command.Do...)
+		add(0, "", false, command.Do...)
 	case *syntax.ForClause:
-		add(0, command.Do...)
+		add(0, "", false, command.Do...)
 	case *syntax.CaseClause:
 		for index, item := range command.Items {
-			add(uint32(index), item.Stmts...)
+			add(uint32(index), item.Op.String(), traceCaseItemDefault(item), item.Stmts...)
 		}
 	case *syntax.Subshell:
-		add(0, command.Stmts...)
+		add(0, "", false, command.Stmts...)
 	case *syntax.Block:
-		add(0, command.Stmts...)
+		add(0, "", false, command.Stmts...)
 	case *syntax.FuncDecl:
-		add(0, command.Body)
+		add(0, "", false, command.Body)
 	case *syntax.TimeClause:
-		add(0, command.Stmt)
+		add(0, "", false, command.Stmt)
 	case *syntax.CoprocClause:
-		add(0, command.Stmt)
+		add(0, "", false, command.Stmt)
 	}
 	return children
 }
@@ -334,10 +362,52 @@ func traceFlowCanSkip(statement *syntax.Stmt) bool {
 		}
 		return last.ThenPos.IsValid()
 	case *syntax.CaseClause:
+		for _, item := range command.Items {
+			if traceCaseItemDefault(item) {
+				return false
+			}
+		}
+		return true
+	case *syntax.ForClause:
+		loop, arithmetic := command.Loop.(*syntax.CStyleLoop)
+		return !arithmetic || loop.Cond != nil
+	case *syntax.WhileClause:
 		return true
 	default:
 		return false
 	}
+}
+
+func traceCaseItemDefault(item *syntax.CaseItem) bool {
+	if item == nil {
+		return false
+	}
+	for _, pattern := range item.Patterns {
+		if len(pattern.Parts) != 1 {
+			continue
+		}
+		literal, ok := pattern.Parts[0].(*syntax.Lit)
+		if ok && literal.Value == "*" {
+			return true
+		}
+	}
+	return false
+}
+
+func traceFlowCommand(statement *syntax.Stmt) string {
+	call, ok := statement.Cmd.(*syntax.CallExpr)
+	if !ok || len(call.Args) == 0 {
+		return ""
+	}
+	return call.Args[0].Lit()
+}
+
+func traceFlowFunction(statement *syntax.Stmt) string {
+	declaration, ok := statement.Cmd.(*syntax.FuncDecl)
+	if !ok || declaration.Name == nil {
+		return ""
+	}
+	return declaration.Name.Value
 }
 
 func (trace *executionTrace) ensurePath(state *State) uint64 {
@@ -393,6 +463,35 @@ func (trace *executionTrace) statementStarted(execution *ExecutionContext, state
 	trace.lastNode[pathID] = nodeID
 	trace.lastEvent[pathID] = sequence
 	return pathID
+}
+
+// statementActivated reports that control re-entered a statement which still
+// has one active evaluation lifetime. Loops use it for iterations after the
+// first so trace consumers can replay every control-flow visit without
+// manufacturing nested statement-start/finish pairs.
+func (trace *executionTrace) statementActivated(execution *ExecutionContext, state *State, node syntax.Node) {
+	if trace == nil || trace.observer == nil || state == nil || node == nil {
+		return
+	}
+	pathID := trace.ensurePath(state)
+	nodeID := trace.nodeIDs[node]
+	if nodeID == 0 {
+		return
+	}
+	snapshot, snapshotTruncated := trace.stateSnapshot(state)
+	sequence := trace.emit(&TraceEvent{
+		Kind:              TraceStatementActivated,
+		Node:              trace.nodes[nodeID],
+		NodeID:            nodeID,
+		PathID:            pathID,
+		PreviousSequence:  trace.lastEvent[pathID],
+		Steps:             execution.executedSteps,
+		Memory:            execution.traceMemoryWithAggregate(state, trace.aggregate, trace.paths),
+		Snapshot:          snapshot,
+		SnapshotTruncated: snapshotTruncated,
+	})
+	trace.lastNode[pathID] = nodeID
+	trace.lastEvent[pathID] = sequence
 }
 
 func (trace *executionTrace) assignSuccessorPaths(parentPathID, nodeID uint64, successors []*pathResult) {

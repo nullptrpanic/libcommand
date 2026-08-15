@@ -19,6 +19,7 @@ func (e *ExecutionContext) evaluateWhile(s *State, clause *syntax.WhileClause) (
 	}()
 	active := []*pathResult{{state: s, status: StatusCompleted}}
 	completed := make([]*pathResult, 0, 1)
+	reentered := false
 	for len(active) > 0 {
 		conditionPaths, err := e.evaluateStatementsWithoutErrexit(active, clause.Cond)
 		if err != nil {
@@ -57,6 +58,14 @@ func (e *ExecutionContext) evaluateWhile(s *State, clause *syntax.WhileClause) (
 		if len(bodyPaths) == 0 {
 			break
 		}
+		if reentered && e.trace != nil {
+			for _, current := range bodyPaths {
+				if current.status == StatusCompleted {
+					e.trace.statementActivated(e, current.state, clause)
+				}
+			}
+		}
+		reentered = true
 		bodyResults, err := e.evaluateStatements(bodyPaths, clause.Do)
 		if err != nil {
 			return append(completed, bodyResults...), err
@@ -130,7 +139,7 @@ func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, l
 	s.setExitCode(0)
 	active := []*pathResult{{state: s, status: StatusCompleted}}
 	completed := make([]*pathResult, 0)
-	for _, item := range items {
+	for itemIndex, item := range items {
 		bodyInputs := make([]*pathResult, 0, len(active))
 		for _, current := range active {
 			if e.collectInactivePath(&completed, current) {
@@ -147,6 +156,9 @@ func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, l
 				current.state.vars.putUnknown(loop.Name.Value, value)
 			} else {
 				current.state.vars.put(loop.Name.Value, value)
+			}
+			if itemIndex > 0 && e.trace != nil {
+				e.trace.statementActivated(e, current.state, clause)
 			}
 			bodyInputs = append(bodyInputs, current)
 		}
@@ -188,6 +200,7 @@ func (e *ExecutionContext) evaluateArithmeticFor(s *State, clause *syntax.ForCla
 	}
 	active := initial
 	completed := make([]*pathResult, 0)
+	reentered := false
 	for len(active) > 0 {
 		bodyInputs := make([]*pathResult, 0, len(active))
 		for _, current := range active {
@@ -245,6 +258,16 @@ func (e *ExecutionContext) evaluateArithmeticFor(s *State, clause *syntax.ForCla
 		if err := e.checkPathGroupsMaterialization(0, sourceLocation(clause), completed, bodyInputs); err != nil {
 			return append(completed, bodyInputs...), err
 		}
+		if reentered && e.trace != nil {
+			for _, current := range bodyInputs {
+				if current.status == StatusCompleted {
+					e.trace.statementActivated(e, current.state, clause)
+				}
+			}
+		}
+		if len(bodyInputs) > 0 {
+			reentered = true
+		}
 		bodyResults, bodyErr := e.evaluateStatements(bodyInputs, clause.Do)
 		if bodyErr != nil {
 			return append(completed, bodyResults...), bodyErr
@@ -285,7 +308,16 @@ func (e *ExecutionContext) evaluateSelect(s *State, clause *syntax.ForClause, lo
 	s.setExitCode(0)
 	active := []*pathResult{{state: s, status: StatusCompleted}}
 	completed := make([]*pathResult, 0, len(items)+2)
+	reentered := false
 	for len(active) > 0 {
+		if reentered && e.trace != nil {
+			for _, current := range active {
+				if current.status == StatusCompleted {
+					e.trace.statementActivated(e, current.state, clause)
+				}
+			}
+		}
+		reentered = true
 		bodyInputs := make([]*pathResult, 0, len(active))
 		next := make([]*pathResult, 0, len(active))
 		for _, current := range active {

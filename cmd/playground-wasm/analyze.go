@@ -205,9 +205,9 @@ func analyzeWithTrace(request *playgroundRequest, maximumEvents int, stream func
 			response.Nodes = append(response.Nodes, event.Node)
 		} else {
 			response.Events = append(response.Events, displayEvent)
-			if stream != nil {
-				stream(displayEvent)
-			}
+		}
+		if stream != nil {
+			stream(displayEvent)
 		}
 		if event.Memory != nil && event.Memory.AggregateBytes > response.PeakLogicalBytes {
 			response.PeakLogicalBytes = event.Memory.AggregateBytes
@@ -267,7 +267,7 @@ func traceDisplayBytes(event *libcommand.TraceEvent) int {
 	const objectOverhead = 256
 	size := objectOverhead + len(event.ChildPathIDs)*24 + 6*len(event.Error)
 	if event.Node != nil {
-		size += objectOverhead + 6*(len(event.Node.Kind)+len(event.Node.Snippet))
+		size += objectOverhead + 6*(len(event.Node.Kind)+len(event.Node.Snippet)+len(event.Node.FlowCommand)+len(event.Node.FlowFunction)+len(event.Node.FlowGroupExit))
 		if event.Node.Source != nil {
 			size += 6 * len(event.Node.Source.Name)
 		}

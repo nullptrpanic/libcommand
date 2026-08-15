@@ -15,6 +15,7 @@ import {
   liveControlView,
   nodeOutput,
   normalizeCommands,
+  executionOccurrenceLabel,
   parseEnvironment,
   tokenizeBash,
 } from "./model.js";
@@ -40,44 +41,87 @@ test("live controls distinguish idle running and paused sessions", () => {
   });
 });
 
-test("runtime flow grows when command events arrive", () => {
+test("runtime flow grows when control and command events arrive", () => {
   const runtime = createRuntimeFlowModel();
-  runtime.append({ kind: "node_discovered", node: node(1, 0, "command", "echo live") });
-  runtime.append(commandStarted(1, 1, "echo", [{ kind: 0, value: "live" }]));
+  runtime.append({ kind: "node_discovered", node: node(1, 0, "loop", "for item in values") });
+  runtime.append(event(1, "statement_started", 1, 1));
+  runtime.append({ kind: "node_discovered", node: node(2, 0, "command", "echo live") });
+  runtime.append(commandStarted(2, 2, "echo", [{ kind: 0, value: "live" }]));
 
-  assert.equal(runtime.model.nodes.length, 1);
-  assert.equal(runtime.model.nodes[0].definition.snippet, "echo live");
-  assert.equal(runtime.model.nodes[0].commandResult, null);
+  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.snippet), ["for item in values", "echo live"]);
+  assert.equal(runtime.model.nodes[1].commandResult, null);
 
-  runtime.append(commandFinished(2, 1, { exitCode: 0, stdout: "live\n", outputCaptured: true }));
+  runtime.append(commandFinished(3, 2, { exitCode: 0, stdout: "live\n", outputCaptured: true }));
 
-  assert.equal(runtime.model.nodes.length, 1);
-  assert.equal(runtime.model.nodes[0].commandResult.stdout, "live\n");
-  assert.equal(runtime.model.maximumSequence, 2);
+  assert.equal(runtime.model.nodes.length, 2);
+  assert.equal(runtime.model.nodes[1].commandResult.stdout, "live\n");
+  assert.equal(runtime.model.maximumSequence, 3);
 });
 
-test("advanceRuntimeFlow reveals at most one command node per visual step", () => {
+test("runtime flow records every loop and condition re-entry in execution order", () => {
+  const runtime = createRuntimeFlowModel([
+    node(1, 0, "loop", "for i in one two three"),
+    node(2, 1, "condition", "if (( i == 1 ))"),
+    node(3, 1, "command", "lark-cli send"),
+  ]);
+  const events = [
+    event(1, "statement_started", 1, 1),
+    event(2, "statement_started", 2, 1),
+    event(3, "statement_finished", 2, 1),
+    commandStarted(4, 3, "lark-cli", [{ kind: 0, value: "send" }]),
+    commandFinished(5, 3),
+    event(6, "statement_activated", 1, 1),
+    event(7, "statement_started", 2, 1),
+    event(8, "statement_finished", 2, 1),
+    commandStarted(9, 3, "lark-cli", [{ kind: 0, value: "send" }]),
+    commandFinished(10, 3),
+  ];
+  for (const current of events) runtime.append(current);
+
+  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), [
+    "loop", "condition", "command", "loop", "condition", "command",
+  ]);
+  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.snippet), [
+    "for i in one two three", "if (( i == 1 ))", "lark-cli send",
+    "for i in one two three", "if (( i == 1 ))", "lark-cli send",
+  ]);
+  assert.deepEqual(runtime.model.edges.map((edge) => [edge.from, edge.to]), [
+    ["runtime:1", "runtime:2"],
+    ["runtime:2", "runtime:4"],
+    ["runtime:4", "runtime:6"],
+    ["runtime:6", "runtime:7"],
+    ["runtime:7", "runtime:9"],
+  ]);
+});
+
+test("advanceRuntimeFlow reveals at most one runtime node per visual step", () => {
   const runtime = createRuntimeFlowModel();
   const events = [
-    commandStarted(1, 1, "first"),
-    commandFinished(2, 1),
-    commandStarted(3, 2, "second"),
-    commandFinished(4, 2),
+    { kind: "node_discovered", node: node(1, 0, "loop", "while ready") },
+    event(1, "statement_started", 1, 1),
+    commandStarted(2, 2, "first"),
+    commandFinished(3, 2),
+    commandStarted(4, 3, "second"),
+    commandFinished(5, 3),
   ];
 
   const first = advanceRuntimeFlow(runtime, events, 0);
-  assert.deepEqual(first, { next: 1, changed: true, revealed: true });
-  assert.deepEqual(runtime.model.nodes.map((item) => item.invocation.name), ["first"]);
+  assert.deepEqual(first, { next: 2, changed: true, revealed: true });
+  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), ["loop"]);
 
   const second = advanceRuntimeFlow(runtime, events, first.next);
   assert.deepEqual(second, { next: 3, changed: true, revealed: true });
-  assert.deepEqual(runtime.model.nodes.map((item) => item.invocation.name), ["first", "second"]);
+  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), ["loop", "command"]);
 
-  const finished = advanceRuntimeFlow(runtime, events, second.next);
-  assert.deepEqual(finished, { next: 4, changed: true, revealed: false });
+  const third = advanceRuntimeFlow(runtime, events, second.next);
+  assert.deepEqual(third, { next: 5, changed: true, revealed: true });
+  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), ["loop", "command", "command"]);
+
+  const finished = advanceRuntimeFlow(runtime, events, third.next);
+  assert.deepEqual(finished, { next: 6, changed: true, revealed: false });
 });
 
-test("buildFlowModels separates complete AST syntax from actual runtime commands", () => {
+test("buildFlowModels separates complete AST syntax from actual runtime execution", () => {
   const models = buildFlowModels({
     nodes: [
       node(1, 0, "condition", "if feature-enabled"),
@@ -107,13 +151,14 @@ test("buildFlowModels separates complete AST syntax from actual runtime commands
   assert.deepEqual(models.ast.nodes.map((item) => item.nodeID).sort((left, right) => left - right), [1, 2, 3]);
   assert.equal(models.ast.nodes.find((item) => item.nodeID === 2).executed, true);
   assert.equal(models.ast.nodes.find((item) => item.nodeID === 3).state, "not-executed");
-  assert.deepEqual(models.runtime.nodes.map((item) => item.invocation.name), ["echo"]);
+  assert.deepEqual(models.runtime.nodes.map((item) => item.definition.kind), ["condition", "command"]);
+  assert.equal(models.runtime.nodes[1].invocation.name, "echo");
 });
 
 test("AST folds embedded evaluation details while runtime keeps executed commands", () => {
   const models = buildFlowModels({
     nodes: [
-      node(1, 0, "loop", "for i in $(seq 1 3)"),
+      { ...node(1, 0, "loop", "for i in $(seq 1 3)"), flowCanSkip: true },
       { ...node(2, 1, "command", "seq 1 3"), embedded: true },
       node(3, 1, "condition", "if (( i == 1 ))"),
       { ...node(4, 3, "arithmetic", "(( i == 1 ));"), embedded: true },
@@ -133,7 +178,8 @@ test("AST folds embedded evaluation details while runtime keeps executed command
 
   assert.deepEqual(models.ast.nodes.map((item) => item.nodeID), [1, 3, 5, 6]);
   assert.equal(models.ast.nodes.find((item) => item.nodeID === 3).state, "unresolved");
-  assert.deepEqual(models.runtime.nodes.map((item) => item.invocation.name), ["seq", "lark-cli"]);
+  assert.deepEqual(models.runtime.nodes.map((item) => item.definition.kind), ["loop", "command", "condition", "command"]);
+  assert.deepEqual(models.runtime.nodes.filter((item) => item.invocation).map((item) => item.invocation.name), ["seq", "lark-cli"]);
 });
 
 test("AST connects visible syntax through an embedded structural parent", () => {
@@ -200,7 +246,7 @@ test("AST source-order edges continue after the previous top-level subtree", () 
 test("AST control flow rejoins every alternative before the following statement", () => {
   const model = buildFlowModel({
     nodes: [
-      node(1, 0, "loop", "for i in $(seq 1 3)"),
+      { ...node(1, 0, "loop", "for i in $(seq 1 3)"), flowCanSkip: true },
       node(2, 1, "condition", "if (( i == 1 ))"),
       { ...node(3, 2, "command", "text=first"), flowGroup: 0 },
       { ...node(4, 2, "command", "text=other"), flowGroup: 1 },
@@ -211,11 +257,12 @@ test("AST control flow rejoins every alternative before the following statement"
 
   assert.deepEqual(edgePairs(model), [
     ["ast:1", "ast:2"],
+    ["ast:1", "ast:6"],
     ["ast:2", "ast:3"],
     ["ast:2", "ast:4"],
     ["ast:3", "ast:5"],
     ["ast:4", "ast:5"],
-    ["ast:5", "ast:6"],
+    ["ast:5", "ast:1"],
   ]);
 });
 
@@ -232,10 +279,242 @@ test("AST control flow keeps statements sequential inside each alternative", () 
 
   assert.deepEqual(edgePairs(model), [
     ["ast:1", "ast:2"],
-    ["ast:2", "ast:3"],
     ["ast:1", "ast:4"],
+    ["ast:2", "ast:3"],
     ["ast:3", "ast:5"],
     ["ast:4", "ast:5"],
+  ]);
+});
+
+test("AST function bodies are entered by calls instead of declarations", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "function", "f() { body; }"), flowFunction: "f" },
+      { ...node(2, 1, "command", "body"), flowCommand: "body" },
+      { ...node(3, 0, "command", "after"), flowCommand: "after" },
+      { ...node(4, 0, "command", "f"), flowCommand: "f" },
+      { ...node(5, 0, "command", "done"), flowCommand: "done" },
+    ],
+  });
+
+  assert.deepEqual(edgePairs(model), [
+    ["ast:1", "ast:3"],
+    ["ast:2", "ast:5"],
+    ["ast:3", "ast:4"],
+    ["ast:4", "ast:2"],
+  ]);
+});
+
+test("AST loops expose zero-iteration completion and a repeated-body back edge", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "loop", "for item in values"), flowCanSkip: true },
+      { ...node(2, 1, "command", "body"), flowCommand: "body" },
+      { ...node(3, 0, "command", "after"), flowCommand: "after" },
+    ],
+  });
+
+  assert.deepEqual(edgePairs(model), [
+    ["ast:1", "ast:2"],
+    ["ast:1", "ast:3"],
+    ["ast:2", "ast:1"],
+  ]);
+  assert.equal(model.edges.find((edge) => edge.from === "ast:2" && edge.to === "ast:1").backEdge, true);
+});
+
+test("AST unconditional loops reach following syntax only through break", () => {
+  const withoutBreak = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "loop", "for ((;;))"), flowCanSkip: false },
+      node(2, 1, "command", "body"),
+      node(3, 0, "command", "after"),
+    ],
+  });
+  assert.deepEqual(edgePairs(withoutBreak), [
+    ["ast:1", "ast:2"],
+    ["ast:2", "ast:1"],
+  ]);
+
+  const withBreak = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "loop", "for ((;;))"), flowCanSkip: false },
+      { ...node(2, 1, "command", "break"), flowCommand: "break" },
+      node(3, 0, "command", "after"),
+    ],
+  });
+  assert.deepEqual(edgePairs(withBreak), [
+    ["ast:1", "ast:2"],
+    ["ast:2", "ast:3"],
+  ]);
+});
+
+test("AST execution returns through a loop header before continuing", () => {
+  const ast = createASTFlowModel([
+    { ...node(1, 0, "loop", "for item in values"), flowCanSkip: true },
+    node(2, 1, "command", "body"),
+    node(3, 0, "command", "after"),
+  ]);
+
+  ast.append(event(1, "statement_started", 1, 1));
+  ast.append(event(2, "statement_started", 2, 1));
+  ast.append(event(3, "statement_finished", 2, 1));
+  ast.append({ ...event(4, "statement_finished", 1, 1), status: 0 });
+  ast.append(event(5, "statement_started", 3, 1));
+
+  assert.equal(edgeState(ast.model, "ast:2", "ast:1"), "executed");
+  assert.equal(edgeState(ast.model, "ast:1", "ast:3"), "executed");
+  assert.equal(ast.model.edges.some((edge) => edge.from === "ast:2" && edge.to === "ast:3"), false);
+});
+
+test("AST break leaves a loop without a synthetic return to its header", () => {
+  const ast = createASTFlowModel([
+    { ...node(1, 0, "loop", "while true"), flowCanSkip: true },
+    { ...node(2, 1, "command", "break"), flowCommand: "break" },
+    node(3, 0, "command", "after"),
+  ]);
+
+  ast.append(event(1, "statement_started", 1, 1));
+  ast.append(event(2, "statement_started", 2, 1));
+  ast.append(event(3, "statement_finished", 2, 1));
+  ast.append({ ...event(4, "statement_finished", 1, 1), status: 0 });
+  ast.append(event(5, "statement_started", 3, 1));
+
+  assert.equal(edgeState(ast.model, "ast:2", "ast:3"), "executed");
+  assert.equal(ast.model.edges.some((edge) => edge.from === "ast:2" && edge.to === "ast:1"), false);
+});
+
+test("AST uses an executed wrapper's control command when leaving a loop", () => {
+  const ast = createASTFlowModel([
+    { ...node(1, 0, "loop", "while true"), flowCanSkip: true },
+    { ...node(2, 1, "command", "command break"), flowCommand: "command" },
+    node(3, 0, "command", "after"),
+  ]);
+
+  ast.append(event(1, "statement_started", 1, 1));
+  ast.append(event(2, "statement_started", 2, 1));
+  ast.append(commandStarted(3, 2, "break"));
+  ast.append(commandFinished(4, 2));
+  ast.append(event(5, "statement_finished", 2, 1));
+  ast.append({ ...event(6, "statement_finished", 1, 1), status: 0 });
+  ast.append(event(7, "statement_started", 3, 1));
+
+  assert.equal(edgeState(ast.model, "ast:2", "ast:3"), "executed");
+  assert.equal(edgeState(ast.model, "ast:2", "ast:1"), "not-executed");
+});
+
+test("AST case fallthrough enters the next body and an exhaustive default removes no-match flow", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "condition", "case value in"), flowCanSkip: false },
+      { ...node(2, 1, "command", "first"), flowGroup: 0, flowGroupExit: ";&" },
+      { ...node(3, 1, "command", "fallback"), flowGroup: 1, flowGroupExit: ";;", flowGroupDefault: true },
+      node(4, 0, "command", "after"),
+    ],
+  });
+
+  assert.deepEqual(edgePairs(model), [
+    ["ast:1", "ast:2"],
+    ["ast:1", "ast:3"],
+    ["ast:2", "ast:3"],
+    ["ast:3", "ast:4"],
+  ]);
+});
+
+test("AST case resume can test every later item but cannot bypass a later default", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "condition", "case value in"), flowCanSkip: false },
+      { ...node(2, 1, "command", "first"), flowGroup: 0, flowGroupExit: ";;&" },
+      { ...node(3, 1, "command", "second"), flowGroup: 1, flowGroupExit: ";;" },
+      { ...node(4, 1, "command", "fallback"), flowGroup: 2, flowGroupExit: ";;", flowGroupDefault: true },
+      node(5, 0, "command", "after"),
+    ],
+  });
+
+  assert.deepEqual(edgePairs(model), [
+    ["ast:1", "ast:2"],
+    ["ast:1", "ast:3"],
+    ["ast:1", "ast:4"],
+    ["ast:2", "ast:3"],
+    ["ast:2", "ast:4"],
+    ["ast:3", "ast:5"],
+    ["ast:4", "ast:5"],
+  ]);
+});
+
+test("AST control transfers do not connect to unreachable sequential statements", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "command", "exit 7"), flowCommand: "exit" },
+      node(2, 0, "command", "never"),
+    ],
+  });
+
+  assert.deepEqual(edgePairs(model), []);
+});
+
+test("AST invalid top-level loop and return controls continue after their Bash error", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "command", "break"), flowCommand: "break" },
+      { ...node(2, 0, "command", "continue"), flowCommand: "continue" },
+      { ...node(3, 0, "command", "return"), flowCommand: "return" },
+      node(4, 0, "command", "after"),
+    ],
+  });
+
+  assert.deepEqual(edgePairs(model), [
+    ["ast:1", "ast:2"],
+    ["ast:2", "ast:3"],
+    ["ast:3", "ast:4"],
+  ]);
+});
+
+test("AST loop break and continue target the loop boundary instead of following statements", () => {
+  const breaking = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "loop", "while condition"), flowCanSkip: true },
+      { ...node(2, 1, "command", "break"), flowCommand: "break" },
+      node(3, 1, "command", "never"),
+      node(4, 0, "command", "after"),
+    ],
+  });
+  assert.deepEqual(edgePairs(breaking), [
+    ["ast:1", "ast:2"],
+    ["ast:1", "ast:4"],
+    ["ast:2", "ast:4"],
+  ]);
+
+  const continuing = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "loop", "while condition"), flowCanSkip: true },
+      { ...node(2, 1, "command", "continue"), flowCommand: "continue" },
+      node(3, 1, "command", "never"),
+      node(4, 0, "command", "after"),
+    ],
+  });
+  assert.deepEqual(edgePairs(continuing), [
+    ["ast:1", "ast:2"],
+    ["ast:1", "ast:4"],
+    ["ast:2", "ast:1"],
+  ]);
+});
+
+test("AST function return rejoins the caller and skips the rest of the body", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "function", "f() { return; never; }"), flowFunction: "f" },
+      { ...node(2, 1, "command", "return"), flowCommand: "return" },
+      node(3, 1, "command", "never"),
+      { ...node(4, 0, "command", "f"), flowCommand: "f" },
+      node(5, 0, "command", "after"),
+    ],
+  });
+
+  assert.deepEqual(edgePairs(model), [
+    ["ast:1", "ast:4"],
+    ["ast:2", "ast:5"],
+    ["ast:4", "ast:2"],
   ]);
 });
 
@@ -261,6 +540,29 @@ test("AST merge edges remain dashed when their source alternative was not execut
   assert.equal(edgeState(model, "ast:3", "ast:4"), "not-executed");
 });
 
+test("AST edges use observed transitions when different loop iterations take different branches", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "condition", "if enabled"), flowCanSkip: true },
+      node(2, 1, "command", "body"),
+      node(3, 0, "command", "after"),
+    ],
+    events: [
+      event(1, "statement_started", 1, 1),
+      event(2, "statement_started", 2, 1),
+      event(3, "statement_finished", 2, 1),
+      event(4, "statement_started", 3, 1),
+      event(5, "statement_finished", 3, 1),
+      event(6, "statement_started", 1, 1),
+      event(7, "statement_started", 3, 1),
+    ],
+  });
+
+  assert.equal(edgeState(model, "ast:1", "ast:2"), "executed");
+  assert.equal(edgeState(model, "ast:2", "ast:3"), "executed");
+  assert.equal(edgeState(model, "ast:1", "ast:3"), "executed");
+});
+
 test("AST conditions without an else retain their direct fallthrough edge", () => {
   const model = buildFlowModel({
     nodes: [
@@ -278,8 +580,8 @@ test("AST conditions without an else retain their direct fallthrough edge", () =
 
   assert.deepEqual(edgePairs(model), [
     ["ast:1", "ast:2"],
-    ["ast:2", "ast:3"],
     ["ast:1", "ast:3"],
+    ["ast:2", "ast:3"],
   ]);
   assert.equal(edgeState(model, "ast:2", "ast:3"), "not-executed");
   assert.equal(edgeState(model, "ast:1", "ast:3"), "executed");
@@ -299,6 +601,35 @@ test("AST flow can overlay streamed execution without replacing its syntax nodes
   assert.equal(ast.model.nodes.find((item) => item.nodeID === 1).executed, true);
   assert.equal(ast.model.nodes.find((item) => item.nodeID === 2).executed, true);
   assert.equal(ast.model.nodes.find((item) => item.nodeID === 3).state, "not-executed");
+});
+
+test("AST live playback activates a repeated loop node on every execution", () => {
+  const ast = createASTFlowModel([node(1, 0, "condition", "if (( i == 1 ))")]);
+
+  const first = ast.append(event(1, "statement_started", 1, 1));
+  ast.append(event(2, "statement_finished", 1, 1));
+  const second = ast.append(event(3, "statement_started", 1, 1));
+
+  assert.equal(first.activated, true);
+  assert.equal(first.revealed, true);
+  assert.equal(second.activated, true);
+  assert.equal(second.revealed, false);
+  assert.equal(ast.model.nodes[0].executionCount, 2);
+});
+
+test("AST live playback activates the loop header when control re-enters it", () => {
+  const ast = createASTFlowModel([
+      { ...node(1, 0, "loop", "for item in values"), flowCanSkip: true },
+    node(2, 1, "command", "body"),
+  ]);
+
+  ast.append(event(1, "statement_started", 1, 1));
+  ast.append(event(2, "statement_started", 2, 1));
+  const reentered = ast.append(event(3, "statement_activated", 1, 1));
+
+  assert.equal(reentered.activated, true);
+  assert.equal(ast.model.nodes.find((item) => item.nodeID === 1).executionCount, 2);
+  assert.equal(edgeState(ast.model, "ast:2", "ast:1"), "executed");
 });
 
 test("runtime flow uses expanded command order and hides eval containers", () => {
@@ -467,6 +798,65 @@ test("layoutASTFlowGraph aligns alternative branches and advances after their su
   assert.equal(positions[3].x, positions[8].x);
 });
 
+test("layoutASTFlowGraph keeps a skippable condition on the main line and moves its body right", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "condition", "if missing"), flowCanSkip: true },
+      node(2, 1, "command", "lark-cli log"),
+      node(3, 0, "loop", "for item in values"),
+    ],
+  });
+  const layout = layoutASTFlowGraph(model.nodes, model.edges, 1000, 800);
+  const condition = layout.positions.get("ast:1");
+  const optional = layout.positions.get("ast:2");
+  const following = layout.positions.get("ast:3");
+
+  assert.equal(condition.x, following.x);
+  assert.ok(optional.x > condition.x);
+  const fallthrough = model.edges.find((edge) => edge.from === "ast:1" && edge.to === "ast:3");
+  assert.equal(layout.edgeRoutes.has(fallthrough.id), false);
+  const center = condition.x + layout.nodeWidth / 2;
+  const fromBottom = condition.y + layout.nodeHeight;
+  const bend = Math.max(30, (following.y - fromBottom) * .5);
+  assert.equal(
+    playgroundModel.flowEdgePath(fallthrough, condition, following, layout),
+    `M ${center} ${fromBottom} C ${center} ${fromBottom + bend}, ${center} ${following.y - bend}, ${center} ${following.y}`,
+  );
+});
+
+test("layoutASTFlowGraph allocates distinct external rails outside every node", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "loop", "outer"), flowCanSkip: true },
+      { ...node(2, 1, "loop", "inner"), flowCanSkip: true },
+      node(3, 2, "command", "body"),
+      node(4, 0, "command", "after"),
+    ],
+  });
+  const layout = layoutASTFlowGraph(model.nodes, model.edges, 1000, 800);
+  const nodeLeft = Math.min(...layout.positions.values().map((position) => position.x));
+  const nodeRight = Math.max(...layout.positions.values().map((position) => position.x + layout.nodeWidth));
+  const rails = [...layout.edgeRoutes.values()].map((route) => route.railX);
+
+  assert.ok(rails.length >= 2);
+  assert.equal(new Set(rails).size, rails.length);
+  assert.ok(rails.every((rail) => rail < nodeLeft || rail > nodeRight));
+});
+
+test("layoutASTFlowGraph handles deeply nested syntax without recursive stack growth", () => {
+  const nodes = Array.from({ length: 2000 }, (_, index) => ({
+    id: `ast:${index + 1}`,
+    nodeID: index + 1,
+    syntaxParentID: index ? `ast:${index}` : null,
+    syntaxFlowGroup: 0,
+    definition: { parentId: index, flowGroup: 0 },
+  }));
+
+  const layout = layoutASTFlowGraph(nodes, [], 1000, 800);
+  assert.equal(layout.positions.size, nodes.length);
+  assert.ok(layout.positions.get("ast:2000").y > layout.positions.get("ast:1").y);
+});
+
 test("flow layouts start at the top and center their first node horizontally", () => {
   const nodes = [
     { id: "ast:1", nodeID: 1, definition: { parentId: 0 } },
@@ -504,7 +894,7 @@ test("flowScrollTarget centers horizontally and follows vertically without cente
 });
 
 test("flowEdgePath routes fallthrough edges around intervening node columns", () => {
-  const layout = { nodeWidth: 196, nodeHeight: 94, width: 792 };
+  const layout = { nodeWidth: 196, nodeHeight: 94, width: 792, edgeRoutes: new Map() };
   const from = { x: 298, y: 178 };
   const to = { x: 298, y: 454 };
 
@@ -513,9 +903,18 @@ test("flowEdgePath routes fallthrough edges around intervening node columns", ()
     "M 396 272 C 396 363, 396 363, 396 454",
   );
   assert.equal(
-    playgroundModel.flowEdgePath?.({ fallthrough: true }, from, to, layout),
-    "M 396 272 C 768 302, 768 424, 396 454",
+    playgroundModel.flowEdgePath?.({ id: "fallthrough", fallthrough: true }, from, to, {
+      ...layout,
+      edgeRoutes: new Map([["fallthrough", { railX: 776, backEdge: false }]]),
+    }),
+    "M 396 272 C 396 296, 776 296, 776 296 L 776 430 C 776 430, 396 430, 396 454",
   );
+});
+
+test("AST repeated execution context is explicitly identified as the latest occurrence", () => {
+  assert.equal(executionOccurrenceLabel({ executionCount: 0 }), "Not executed");
+  assert.equal(executionOccurrenceLabel({ executionCount: 1 }), "Execution 1 of 1");
+  assert.equal(executionOccurrenceLabel({ executionCount: 3 }), "Latest execution (3 of 3)");
 });
 
 test("buildFlowModel keeps known unexecuted syntax dashed", () => {
@@ -809,7 +1208,9 @@ function valuesOf(tokens, kind) {
 }
 
 function edgePairs(model) {
-  return model.edges.map((edge) => [edge.from, edge.to]);
+  return model.edges
+    .map((edge) => [edge.from, edge.to])
+    .sort((left, right) => `${left[0]}:${left[1]}`.localeCompare(`${right[0]}:${right[1]}`));
 }
 
 function edgeState(model, from, to) {

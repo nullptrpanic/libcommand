@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -72,7 +73,7 @@ printf done | base64`
 	}
 	wantFlowCanSkip := map[string]bool{
 		`if [[ -n "$CHAT_ID" ]]; then echo reached fi`:                                                           true,
-		`for i in $(seq 1 2); do if (( i == 1 )); then text=first else text=other fi lark-cli send "$text" done`: false,
+		`for i in $(seq 1 2); do if (( i == 1 )); then text=first else text=other fi lark-cli send "$text" done`: true,
 		`if (( i == 1 )); then text=first else text=other fi`:                                                    false,
 	}
 	for _, node := range nodes {
@@ -99,5 +100,90 @@ printf done | base64`
 		if !found {
 			t.Errorf("missing expected embedded node %q", snippet)
 		}
+	}
+}
+
+func TestParseTraceNodesDescribesControlFlowSemantics(t *testing.T) {
+	const source = `f() { echo body; }
+for item in; do
+  break
+done
+case "$item" in
+  first) echo first ;&
+  *) echo fallback ;;
+esac
+f`
+
+	nodes, err := ParseTraceNodes(context.Background(), source, "preview.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	bySnippet := make(map[string]*TraceNode, len(nodes))
+	for _, node := range nodes {
+		bySnippet[node.Snippet] = node
+	}
+	if got := bySnippet[`f() { echo body; }`].FlowFunction; got != "f" {
+		t.Fatalf("function name = %q, want f", got)
+	}
+	if got := bySnippet["f"].FlowCommand; got != "f" {
+		t.Fatalf("call name = %q, want f", got)
+	}
+	if got := bySnippet["break"].FlowCommand; got != "break" {
+		t.Fatalf("control command = %q, want break", got)
+	}
+	if !bySnippet["for item in; do break done"].FlowCanSkip {
+		t.Fatal("loop must expose its zero-iteration exit")
+	}
+	if got := bySnippet["echo first"].FlowGroupExit; got != ";&" {
+		t.Fatalf("first case exit = %q, want ;&", got)
+	}
+	fallback := bySnippet["echo fallback"]
+	if got := fallback.FlowGroupExit; got != ";;" {
+		t.Fatalf("fallback case exit = %q, want ;;", got)
+	}
+	if !fallback.FlowGroupDefault {
+		t.Fatal("literal * case item must be marked as the default group")
+	}
+	if bySnippet[`case "$item" in first) echo first ;& *) echo fallback ;; esac`].FlowCanSkip {
+		t.Fatal("case with a literal * item must not expose a no-match exit")
+	}
+}
+
+func TestParseTraceNodesDistinguishesUnconditionalLoopAndLiteralCasePattern(t *testing.T) {
+	const source = `for ((;;)); do
+  echo forever
+done
+case "$item" in
+  \*) echo literal-star ;;
+esac`
+
+	nodes, err := ParseTraceNodes(context.Background(), source, "preview.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var loopNode, caseNode, literalNode *TraceNode
+	for _, node := range nodes {
+		switch {
+		case node.Kind == "loop":
+			loopNode = node
+		case strings.HasPrefix(node.Snippet, "case "):
+			caseNode = node
+		case node.Snippet == "echo literal-star":
+			literalNode = node
+		}
+	}
+	if loopNode == nil || caseNode == nil || literalNode == nil {
+		t.Fatalf("trace nodes = %#v, want loop, case, and literal-pattern body", nodes)
+	}
+	if loopNode.FlowCanSkip {
+		t.Fatal("C-style loop without a condition must not expose a condition exit")
+	}
+	if !caseNode.FlowCanSkip {
+		t.Fatal("case with an escaped literal star must retain its no-match exit")
+	}
+	if literalNode.FlowGroupDefault {
+		t.Fatal("escaped literal star must not be marked as a default case group")
 	}
 }

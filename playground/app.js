@@ -4,6 +4,7 @@ import {
   concreteDisplayValue,
   createASTFlowModel,
   createRuntimeFlowModel,
+  executionOccurrenceLabel,
   flowEdgePath,
   flowScrollTarget,
   formatBytes,
@@ -453,7 +454,7 @@ function advanceLiveFlow() {
     const astStep = liveAST.append(event);
     changed = liveRuntime.append(event) || astStep.changed || changed;
     if (event.kind === "command_started") liveInvocationCount++;
-    if (currentFlowPerspective === "ast" && astStep.revealed) {
+    if (currentFlowPerspective === "ast" && astStep.activated) {
       revealed = true;
       revealedNode = liveAST.model.nodes.find((node) => node.nodeID === event.nodeId) || null;
       break;
@@ -476,7 +477,7 @@ function advanceLiveFlow() {
   currentModel = model;
   if (changed) renderGraph(model, true);
 
-  const perspectiveLabel = currentFlowPerspective === "ast" ? "AST nodes" : "command nodes";
+  const perspectiveLabel = currentFlowPerspective === "ast" ? "AST nodes" : "runtime nodes";
   if (liveFinalResponse) {
     setStatus("Drawing simulation flow", `${model.nodes.length} ${perspectiveLabel} visible · simulation already complete`, "DRAWING");
   } else {
@@ -588,14 +589,14 @@ function beginLiveFlow(source) {
   });
   renderGraph(currentModel);
   const astActive = currentFlowPerspective === "ast";
-  elements.flow_empty.querySelector("h2").textContent = astActive ? "Waiting for AST execution" : "Waiting for runtime commands";
+  elements.flow_empty.querySelector("h2").textContent = astActive ? "Waiting for AST execution" : "Waiting for runtime execution";
   elements.flow_empty.querySelector("p").textContent = astActive
     ? "Parsed syntax stays visible while reached nodes are highlighted in execution order."
-    : "Command nodes appear here as the simulator reaches them.";
+    : "Control statements and expanded command calls appear here as the simulator reaches them.";
   elements.inspector_id.textContent = "NO SELECTION";
   elements.inspector.replaceChildren(createElement("div", "inspector-empty", astActive
     ? "Execution details appear as the simulator reaches each AST node."
-    : "The current command context will appear when execution reaches a call."));
+    : "The current execution context will appear when the simulator reaches a control statement or command call."));
   renderOutputs([], "");
   renderInvocations([]);
   elements.diagnostics_view.replaceChildren(createElement("div", "inspector-empty", "Diagnostics are available after simulation completes."));
@@ -640,7 +641,7 @@ function stopLiveRun() {
   livePaused = false;
   liveTraceEvents = [];
   liveTraceIndex = 0;
-  liveInvocationCount = model.nodes.length;
+  liveInvocationCount = model.nodes.filter((node) => node.invocation).length;
   liveFinalResponse = null;
   currentModels = {
     ast: astModel,
@@ -649,9 +650,9 @@ function stopLiveRun() {
   currentModel = currentModels[currentFlowPerspective] || model;
   activeNodeID = "";
   renderGraph(currentModel, true);
-  setStatus("Simulation stopped", `${model.nodes.length} command nodes retained`, "STOPPED");
+  setStatus("Simulation stopped", `${model.nodes.length} runtime nodes retained`, "STOPPED");
   updateLiveControls(workerWasRunning ? "Restarting WASM" : "Run simulation");
-  showToast("Simulation stopped. Visible command nodes were retained.");
+  showToast("Simulation stopped. Visible runtime nodes were retained.");
   if (workerWasRunning) {
     startWorker();
   } else if (astPreviewDeferred) {
@@ -673,7 +674,9 @@ function renderResponse(response) {
   const perspective = currentFlowPerspective;
   const streamedAST = liveAST?.finish(response);
   const streamedRuntime = liveRuntime?.finish(response);
-  const completeStream = Boolean(streamedAST && streamedRuntime) && liveTraceIndex === liveTraceEvents.length && liveTraceEvents.length === (response.events || []).length;
+  const completeStream = Boolean(streamedAST && streamedRuntime)
+    && liveTraceIndex === liveTraceEvents.length
+    && liveTraceEvents.length === (response.events || []).length + (response.nodes || []).length;
   liveAST = null;
   liveRuntime = null;
   liveTraceEvents = [];
@@ -848,6 +851,7 @@ function renderInspector(node) {
   overview.append(selected);
 
   const execution = inspectorSection("Execution");
+  execution.append(memoryRow("Occurrence", executionOccurrenceLabel(node)));
   execution.append(memoryRow("Trace sequence", node.executed ? `${node.sequence}–${node.endSequence}` : "not reached"));
   execution.append(memoryRow("Execution steps", node.executed ? String(node.steps || 0) : "—"));
   execution.append(memoryRow("Path status", statusLabel(node.pathStatus ?? node.status)));

@@ -41,11 +41,12 @@ make clean
 ### Live Runtime flow
 
 The Message loop example shows the Runtime graph being constructed from actual
-expanded command calls. Nodes appear as trace events arrive, the active call is
-highlighted and followed automatically, and selecting `lark-cli` exposes that
-node's concrete invocation and result in the inspector.
+control-flow visits and expanded command calls. Nodes appear as trace events
+arrive, the active statement or call is highlighted and followed automatically,
+and selecting `lark-cli` exposes that node's concrete invocation and result in
+the inspector.
 
-![The Playground builds a live Runtime command graph and inspects one lark-cli result](../assets/playground/runtime-flow.gif)
+![The Playground builds a live Runtime execution graph and inspects one lark-cli result](../assets/playground/runtime-flow.gif)
 
 ### Live AST walkthrough
 
@@ -61,10 +62,12 @@ the same AST.
 
 ## What the graph means
 
-- **Runtime** is the default perspective. It shows actual expanded command
-  calls in execution order, including commands produced by substitutions,
-  `eval`, or `source`. Expansion containers are omitted, so a decoded call is
-  shown as the commands that produced it followed by the command that ran.
+- **Runtime** is the default perspective. It shows actual loop and condition
+  visits together with expanded command calls in execution order, including
+  commands produced by substitutions, `eval`, or `source`. Expansion containers
+  are omitted, so a decoded call is shown as the commands that produced it
+  followed by the command that ran. Loop headers and nested conditions appear
+  again on every real re-entry instead of being skipped during playback.
   Unregistered commands are retained as purple unresolved nodes. Runtime nodes
   come from Worker trace events received while simulation is active. The first
   command appears immediately and later commands are revealed one per selected
@@ -75,16 +78,19 @@ the same AST.
   dynamically parsed `eval` and `source` content to the existing tree as it is
   discovered. It folds trace nodes marked `Embedded`—condition evaluation,
   substitutions, and pipeline operands already represented by their parent—so
-  control-flow bodies and calls remain readable. Those nodes are still present
-  in the trace and Runtime view. Statements that were never reached remain
-  visible for comparing syntax and reachability.
+  control-flow bodies and calls remain readable. The complete detail remains in
+  the trace, while Runtime retains its concrete command calls. Statements that
+  were never reached remain visible for comparing syntax and reachability.
 - Solid nodes were reached by the simulator.
 - Purple forks are distinct paths explored because a value or status was
   unresolved.
 - Dashed nodes were found in the parsed syntax but were not reached by any
   simulated path.
-- Repeated loop executions increment one AST node's execution count; Runtime
-  still shows each concrete command call separately.
+- Every actual visit re-highlights the corresponding AST node. Loop headers and
+  body statements therefore activate again on each iteration, while their
+  execution count and inspector context retain the latest occurrence. Runtime
+  records every control-flow visit and concrete command call as a separate
+  occurrence.
 - AST graphs start at the top center. Sequential bodies advance downward;
   alternative bodies share a row and rejoin before the following statement.
   A condition without an exhaustive alternative retains a direct fallthrough

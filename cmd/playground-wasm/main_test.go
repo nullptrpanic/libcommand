@@ -104,8 +104,42 @@ func TestAnalyzeStreamsRetainedTraceEvents(t *testing.T) {
 	if started.Sequence >= finished.Sequence {
 		t.Fatalf("stream order = %d then %d, want start before finish", started.Sequence, finished.Sequence)
 	}
-	if len(streamed) != len(response.Events) {
-		t.Fatalf("streamed events = %d, final events = %d", len(streamed), len(response.Events))
+	if len(streamed) != len(response.Events)+len(response.Nodes) {
+		t.Fatalf("streamed events = %d, final events + nodes = %d", len(streamed), len(response.Events)+len(response.Nodes))
+	}
+	discovered := false
+	for _, event := range streamed {
+		discovered = discovered || event.Kind == libcommand.TraceNodeDiscovered && event.Node != nil
+	}
+	if !discovered {
+		t.Fatalf("streamed events = %#v, want discovered source node", streamed)
+	}
+}
+
+func TestAnalyzeStreamsDynamicNodesBeforeTheirExecution(t *testing.T) {
+	var streamed []*libcommand.TraceEvent
+	response := analyzeWithTrace(&playgroundRequest{
+		Source: `eval 'echo dynamic'`,
+	}, maximumTraceEvents, func(event *libcommand.TraceEvent) {
+		streamed = append(streamed, event)
+	})
+	if response.Error != "" {
+		t.Fatal(response.Error)
+	}
+
+	var discoveredSequence, startedSequence uint64
+	for _, event := range streamed {
+		if event.Node != nil && event.Node.Snippet == "echo dynamic" {
+			switch event.Kind {
+			case libcommand.TraceNodeDiscovered:
+				discoveredSequence = event.Sequence
+			case libcommand.TraceStatementStarted:
+				startedSequence = event.Sequence
+			}
+		}
+	}
+	if discoveredSequence == 0 || startedSequence == 0 || discoveredSequence >= startedSequence {
+		t.Fatalf("dynamic node stream order = discovered %d, started %d", discoveredSequence, startedSequence)
 	}
 }
 
