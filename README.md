@@ -482,6 +482,8 @@ are highlighted in execution order; unreached syntax remains dashed. Nested
 evaluation details are folded into their owning statement, while real branch
 and loop bodies remain visible. Syntax dynamically parsed by `eval`, including
 the final `lark-cli` call, is attached to the same AST as it is discovered.
+Runtime transitions never synthesize AST edges; loops remain a forward static
+sequence without iteration back edges or zero-iteration bypass edges.
 
 ![Playground highlighting a stable AST through Base64 decoding, eval, and the dynamically parsed lark-cli call](assets/playground/ast-flow.gif)
 

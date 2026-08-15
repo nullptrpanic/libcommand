@@ -451,7 +451,8 @@ Observer 在模拟 Goroutine 上执行，因此缓慢或阻塞的 Observer 会�
 **AST 实时执行。** 动图从 AST 视角开始并点击 **Run simulation**。解析得到的拓扑
 保持不变，已到达节点按执行顺序逐个高亮，未到达语法始终保留为虚线。父语句
 内部的求值细节会被折叠，真实的分支体和循环体仍然展示；`eval` 动态解析出的语法
-（包括最终的 `lark-cli` 调用）会在发现时挂到同一棵 AST 上。
+（包括最终的 `lark-cli` 调用）会在发现时挂到同一棵 AST 上。Runtime 转移不会
+为 AST 动态补边；循环只保留前向静态序列，不绘制迭代回边或零次执行旁路。
 
 ![Playground 在稳定 AST 上依次高亮 Base64 解码、eval 和动态解析出的 lark-cli 调用](assets/playground/ast-flow.gif)
 

@@ -94,7 +94,10 @@ the same AST.
 - AST graphs start at the top center. Sequential bodies advance downward;
   alternative bodies share a row and rejoin before the following statement.
   A condition without an exhaustive alternative retains a direct fallthrough
-  edge; loop-body statements still connect strictly in source order.
+  edge. Loops remain one forward syntax sequence from header through body to
+  the following statement; iteration back edges and zero-iteration bypasses
+  are not added to the AST. Runtime transition events update existing AST
+  execution state but never synthesize AST edges.
   Live following keeps the active node horizontally centered and scrolls
   vertically only enough to keep it visible with context.
 

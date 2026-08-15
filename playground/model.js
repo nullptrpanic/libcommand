@@ -209,16 +209,9 @@ export function createASTFlowModel(initialDefinitions = []) {
       } else if (node.definition.kind === "loop" && groups[0]?.flow.entry) {
         const body = groups[0].flow;
         addEdge(node, body.entry, { structural: true, flowGroup: groups[0].group });
-        for (const exit of body.normal) addEdge(exit.node, node, { backEdge: true });
-        for (const exit of body.continues) addEdge(exit.node, node, { backEdge: true });
-        const conditionExit = node.definition.flowCanSkip ? [{
-          node,
-          fallthrough: true,
-          bypassedNodeIDs: groups[0].children.map((child) => child.nodeID),
-        }] : [];
         flow = {
           entry: node,
-          normal: [...conditionExit, ...body.breaks],
+          normal: [...body.normal, ...body.breaks, ...body.continues],
           breaks: [],
           continues: [],
           returns: body.returns,
@@ -242,13 +235,6 @@ export function createASTFlowModel(initialDefinitions = []) {
 
     compileSyntaxSequence(roots, flowByNodeID, addEdge);
     patchFunctionCalls(model.nodes, functionBodies, edges, edgeByPair, addEdge, definitions);
-    for (const transition of observedTransitions.values()) {
-      if (!edgeByPair.has(transition.key)) {
-        const from = nodeByDefinitionID.get(transition.fromNodeID);
-        const to = nodeByDefinitionID.get(transition.toNodeID);
-        addEdge(from, to, { observed: true, backEdge: transition.toNodeID <= transition.fromNodeID });
-      }
-    }
     model.edges = edges;
     edgeByTransition = edgeByPair;
     updateSyntaxEdgeStates(model.edges, observedTransitions);
@@ -264,6 +250,8 @@ export function createASTFlowModel(initialDefinitions = []) {
     lastByPath.set(pathID, toNodeID);
     if (!fromNodeID || !toNodeID || fromNodeID === toNodeID) return;
     const key = transitionKey(fromNodeID, toNodeID);
+    const edge = edgeByTransition.get(key);
+    if (!edge) return;
     const unresolved = unresolvedPaths.has(pathID);
     const existing = observedTransitions.get(key);
     if (existing) {
@@ -273,12 +261,7 @@ export function createASTFlowModel(initialDefinitions = []) {
     } else {
       observedTransitions.set(key, { key, fromNodeID, toNodeID, unresolved, sequence: sequence || 0, pathID });
     }
-    const edge = edgeByTransition.get(key);
-    if (edge) {
-      applyObservedTransition(edge, observedTransitions.get(key));
-    } else {
-      topologyDirty = true;
-    }
+    applyObservedTransition(edge, observedTransitions.get(key));
   }
 
   function append(event = {}) {
@@ -338,12 +321,6 @@ export function createASTFlowModel(initialDefinitions = []) {
         node.outputSnapshot = displaySnapshot(event.snapshot) || node.outputSnapshot;
         node.outputSnapshotTruncated ||= Boolean(event.snapshotTruncated);
         updateNode(node, event);
-        if (node.definition.kind === "loop" && (event.status === undefined || Number(event.status) === 0)) {
-          const previous = nodeByDefinitionID.get(lastByPath.get(event.pathId));
-          if (previous && !loopTransferExits(previous)) {
-            recordTransition(event.pathId, node.nodeID, event.sequence);
-          }
-        }
         removeActiveNode(activeByPath.get(event.pathId), node.nodeID);
         changed = true;
         break;
@@ -435,11 +412,6 @@ export function createASTFlowModel(initialDefinitions = []) {
 
 function transitionKey(fromNodeID, toNodeID) {
   return `${fromNodeID}:${toNodeID}`;
-}
-
-function loopTransferExits(node) {
-  const command = node.invocation?.name || node.definition.flowCommand;
-  return command === "break" || command === "return" || command === "exit";
 }
 
 function leafSyntaxFlow(node, definitions) {
