@@ -46,6 +46,10 @@ type TraceNode struct {
 	// fold into its parent. The node and all of its execution events remain in
 	// the trace for runtime correlation.
 	Embedded bool `json:"embedded,omitempty"`
+	// FlowGroup identifies alternative statement bodies under the same parent.
+	// Statements in one group are sequential; distinct groups may be laid out
+	// alongside one another. It does not affect evaluation.
+	FlowGroup uint32 `json:"flowGroup,omitempty"`
 }
 
 // TraceMemory is a logical retained-size snapshot. It describes the same
@@ -226,25 +230,26 @@ func (trace *executionTrace) discover(file *syntax.File, source, name string, pa
 		return
 	}
 	for _, statement := range file.Stmts {
-		trace.discoverStatement(statement, source, name, parentID, false)
+		trace.discoverStatement(statement, source, name, parentID, false, 0)
 		if trace.observer == nil {
 			return
 		}
 	}
 }
 
-func (trace *executionTrace) discoverStatement(statement *syntax.Stmt, source, name string, parentID uint64, embedded bool) {
+func (trace *executionTrace) discoverStatement(statement *syntax.Stmt, source, name string, parentID uint64, embedded bool, flowGroup uint32) {
 	if statement == nil || trace.nodeIDs[statement] != 0 {
 		return
 	}
 	trace.nextNodeID++
 	node := &TraceNode{
-		ID:       trace.nextNodeID,
-		ParentID: parentID,
-		Kind:     traceStatementKind(statement),
-		Snippet:  traceSnippet(source, statement),
-		Source:   traceSource(name, statement),
-		Embedded: embedded,
+		ID:        trace.nextNodeID,
+		ParentID:  parentID,
+		Kind:      traceStatementKind(statement),
+		Snippet:   traceSnippet(source, statement),
+		Source:    traceSource(name, statement),
+		Embedded:  embedded,
+		FlowGroup: flowGroup,
 	}
 	trace.nodeIDs[statement] = node.ID
 	trace.nodes[node.ID] = node
@@ -253,7 +258,7 @@ func (trace *executionTrace) discoverStatement(statement *syntax.Stmt, source, n
 		return
 	}
 
-	visibleChildren := traceVisibleChildStatements(statement)
+	visibleChildren := traceVisibleChildGroups(statement)
 	syntax.Walk(statement, func(child syntax.Node) bool {
 		if child == nil {
 			return trace.observer != nil
@@ -262,8 +267,8 @@ func (trace *executionTrace) discoverStatement(statement *syntax.Stmt, source, n
 			return true
 		}
 		if childStatement, ok := child.(*syntax.Stmt); ok {
-			_, visible := visibleChildren[childStatement]
-			trace.discoverStatement(childStatement, source, name, node.ID, !visible)
+			group, visible := visibleChildren[childStatement]
+			trace.discoverStatement(childStatement, source, name, node.ID, !visible, group)
 			return false
 		}
 		trace.nodeIDs[child] = node.ID
@@ -271,44 +276,46 @@ func (trace *executionTrace) discoverStatement(statement *syntax.Stmt, source, n
 	})
 }
 
-// traceVisibleChildStatements returns statement bodies that remain useful in
+// traceVisibleChildGroups returns statement bodies that remain useful in
 // the static syntax view. Other nested statements are implementation details
 // of evaluating their parent, such as conditions, substitutions, and pipeline
 // operands. They stay in the trace for runtime correlation but are marked as
 // embedded so presentation clients may fold them.
-func traceVisibleChildStatements(statement *syntax.Stmt) map[*syntax.Stmt]struct{} {
-	children := make(map[*syntax.Stmt]struct{})
-	add := func(statements ...*syntax.Stmt) {
+func traceVisibleChildGroups(statement *syntax.Stmt) map[*syntax.Stmt]uint32 {
+	children := make(map[*syntax.Stmt]uint32)
+	add := func(group uint32, statements ...*syntax.Stmt) {
 		for _, child := range statements {
 			if child != nil {
-				children[child] = struct{}{}
+				children[child] = group
 			}
 		}
 	}
 
 	switch command := statement.Cmd.(type) {
 	case *syntax.IfClause:
+		var group uint32
 		for clause := command; clause != nil; clause = clause.Else {
-			add(clause.Then...)
+			add(group, clause.Then...)
+			group++
 		}
 	case *syntax.WhileClause:
-		add(command.Do...)
+		add(0, command.Do...)
 	case *syntax.ForClause:
-		add(command.Do...)
+		add(0, command.Do...)
 	case *syntax.CaseClause:
-		for _, item := range command.Items {
-			add(item.Stmts...)
+		for index, item := range command.Items {
+			add(uint32(index), item.Stmts...)
 		}
 	case *syntax.Subshell:
-		add(command.Stmts...)
+		add(0, command.Stmts...)
 	case *syntax.Block:
-		add(command.Stmts...)
+		add(0, command.Stmts...)
 	case *syntax.FuncDecl:
-		add(command.Body)
+		add(0, command.Body)
 	case *syntax.TimeClause:
-		add(command.Stmt)
+		add(0, command.Stmt)
 	case *syntax.CoprocClause:
-		add(command.Stmt)
+		add(0, command.Stmt)
 	}
 	return children
 }

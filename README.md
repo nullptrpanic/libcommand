@@ -448,7 +448,9 @@ events without stopping Shell evaluation. `TraceNode.Embedded` identifies a
 nested evaluation detail such as a condition command, command substitution, or
 pipeline operand. It is presentation metadata only: node IDs, execution events,
 and Shell behavior are unchanged, so clients may fold it in an AST view while
-retaining it in an execution-oriented view.
+retaining it in an execution-oriented view. `TraceNode.FlowGroup` identifies
+sequential bodies versus alternative bodies under one parent for layered graph
+layout; it likewise has no evaluation semantics.
 
 The browser Playground compiles the simulator to WebAssembly and runs it in a
 disposable Web Worker. It provides separate AST and live Runtime views,

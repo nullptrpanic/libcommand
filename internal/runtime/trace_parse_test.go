@@ -66,10 +66,17 @@ printf done | base64`
 		"printf done":          true,
 		"base64":               true,
 	}
+	wantFlowGroups := map[string]uint32{
+		"text=first": 0,
+		"text=other": 1,
+	}
 	for _, node := range nodes {
 		want := wantEmbedded[node.Snippet]
 		if node.Embedded != want {
 			t.Errorf("node %q embedded = %v, want %v", node.Snippet, node.Embedded, want)
+		}
+		if group, relevant := wantFlowGroups[node.Snippet]; relevant && node.FlowGroup != group {
+			t.Errorf("node %q flow group = %d, want %d", node.Snippet, node.FlowGroup, group)
 		}
 	}
 

@@ -103,6 +103,16 @@ export function createASTFlowModel(initialDefinitions = []) {
     return null;
   }
 
+  function visibleSyntaxParent(definition) {
+    let flowGroup = Number(definition?.flowGroup || 0);
+    for (let current = definition?.parentId; current; current = definitions.get(current)?.parentId) {
+      const node = nodeByDefinitionID.get(current);
+      if (node) return { node, flowGroup };
+      flowGroup = Number(definitions.get(current)?.flowGroup || 0);
+    }
+    return null;
+  }
+
   function markPath(event) {
     if (event.pathId) paths.add(event.pathId);
     for (const childPath of event.childPathIds || []) paths.add(childPath);
@@ -131,11 +141,11 @@ export function createASTFlowModel(initialDefinitions = []) {
     const edges = [];
     let previousNode = null;
     for (const node of model.nodes) {
-      const parent = visibleSyntaxNode(node.definition.parentId);
+      const parent = visibleSyntaxParent(node.definition);
       if (parent) {
-        edges.push(syntaxEdge(parent, node, true));
+        edges.push(syntaxEdge(parent.node, node, true, parent.flowGroup));
       } else if (previousNode) {
-        edges.push(syntaxEdge(previousNode, node, false));
+        edges.push(syntaxEdge(previousNode, node, false, 0));
       }
       previousNode = node;
     }
@@ -434,7 +444,7 @@ export function liveControlView(active, paused) {
   return { icon: "Ⅱ", label: "Pause", running: true, stopVisible: true };
 }
 
-function syntaxEdge(from, to, structural) {
+function syntaxEdge(from, to, structural, flowGroup) {
   return {
     id: `ast-edge:${from.id}:${to.id}`,
     from: from.id,
@@ -445,6 +455,7 @@ function syntaxEdge(from, to, structural) {
     sequence: 0,
     state: "not-executed",
     structural,
+    flowGroup,
   };
 }
 
@@ -479,41 +490,96 @@ function formatInvocationArgument(argument) {
   return JSON.stringify(value);
 }
 
+export function flowScrollTarget(node, viewport, resetTop = false) {
+  const left = Math.max(0, node.left - (viewport.width - node.width) / 2);
+  if (resetTop) return { left, top: 0 };
+
+  const margin = Math.min(48, viewport.height / 4);
+  let top = viewport.scrollTop;
+  if (node.top < top + margin) {
+    top = Math.max(0, node.top - margin);
+  } else if (node.top + node.height > top + viewport.height - margin) {
+    top = Math.max(0, node.top + node.height - viewport.height + margin);
+  }
+  return { left, top };
+}
+
 export function layoutASTFlowGraph(nodes, edges, minimumWidth = 720, minimumHeight = 460) {
   const nodeWidth = 196;
   const nodeHeight = 94;
-  const horizontalIndent = 84;
-  const verticalPitch = 126;
-  const parentByNode = new Map(edges.filter((edge) => edge.structural).map((edge) => [edge.to, edge.from]));
-  const depths = new Map();
-  let maximumDepth = 0;
-  for (const node of nodes) {
-    const parentDepth = depths.get(parentByNode.get(node.id));
-    const depth = parentDepth === undefined ? 0 : parentDepth + 1;
-    depths.set(node.id, depth);
-    maximumDepth = Math.max(maximumDepth, depth);
+  const horizontalGap = 48;
+  const verticalPitch = 138;
+  const verticalPadding = 40;
+  const nodeByID = new Map(nodes.map((node) => [node.id, node]));
+  const childIDs = new Set();
+  const childGroups = new Map();
+  for (const edge of edges) {
+    if (!edge.structural || !nodeByID.has(edge.from) || !nodeByID.has(edge.to)) continue;
+    childIDs.add(edge.to);
+    const groups = childGroups.get(edge.from) || new Map();
+    const group = Number(edge.flowGroup || 0);
+    groups.set(group, [...(groups.get(group) || []), nodeByID.get(edge.to)]);
+    childGroups.set(edge.from, groups);
   }
 
-  const contentWidth = nodeWidth + maximumDepth * horizontalIndent;
+  function layoutSequence(sequence) {
+    const layouts = sequence.map(layoutNode);
+    const width = Math.max(nodeWidth, ...layouts.map((layout) => layout.width));
+    const positions = new Map();
+    let row = 0;
+    for (const layout of layouts) {
+      const left = (width - layout.width) / 2;
+      for (const [id, position] of layout.positions) {
+        positions.set(id, { x: position.x + left, row: position.row + row });
+      }
+      row += layout.rows;
+    }
+    return { width, rows: Math.max(1, row), positions };
+  }
+
+  function layoutNode(node) {
+    const groups = [...(childGroups.get(node.id)?.entries() || [])]
+      .sort(([left], [right]) => left - right)
+      .map(([, children]) => layoutSequence(children));
+    if (groups.length === 0) {
+      return { width: nodeWidth, rows: 1, positions: new Map([[node.id, { x: 0, row: 0 }]]) };
+    }
+
+    const childrenWidth = groups.reduce((total, group) => total + group.width, 0) + horizontalGap * (groups.length - 1);
+    const width = Math.max(nodeWidth, childrenWidth);
+    const positions = new Map([[node.id, { x: (width - nodeWidth) / 2, row: 0 }]]);
+    let left = (width - childrenWidth) / 2;
+    let childRows = 0;
+    for (const group of groups) {
+      for (const [id, position] of group.positions) {
+        positions.set(id, { x: position.x + left, row: position.row + 1 });
+      }
+      left += group.width + horizontalGap;
+      childRows = Math.max(childRows, group.rows);
+    }
+    return { width, rows: childRows + 1, positions };
+  }
+
+  const roots = nodes.filter((node) => !childIDs.has(node.id));
+  const graph = layoutSequence(roots);
   const horizontalPadding = Math.max(40, (minimumWidth - nodeWidth) / 2);
-  const verticalPadding = Math.max(40, (minimumHeight - nodeHeight) / 2);
-  const width = Math.max(minimumWidth, horizontalPadding * 2 + contentWidth);
+  const width = Math.max(minimumWidth, horizontalPadding * 2 + graph.width);
   const positions = new Map();
-  nodes.forEach((node, index) => {
-    positions.set(node.id, {
-      x: horizontalPadding + (depths.get(node.id) || 0) * horizontalIndent,
-      y: verticalPadding + index * verticalPitch,
-      lane: depths.get(node.id) || 0,
-      level: index,
+  for (const [id, position] of graph.positions) {
+    positions.set(id, {
+      x: horizontalPadding + position.x,
+      y: verticalPadding + position.row * verticalPitch,
+      lane: position.x,
+      level: position.row,
     });
-  });
+  }
 
   return {
     positions,
     nodeWidth,
     nodeHeight,
     width,
-    height: verticalPadding * 2 + nodeHeight + Math.max(0, nodes.length - 1) * verticalPitch,
+    height: Math.max(minimumHeight, verticalPadding * 2 + nodeHeight + Math.max(0, graph.rows - 1) * verticalPitch),
   };
 }
 
@@ -523,7 +589,7 @@ export function layoutFlowGraph(nodes, edges, minimumWidth = 720, minimumHeight 
   const horizontalPitch = 244;
   const verticalPitch = 138;
   const horizontalPadding = Math.max(40, (minimumWidth - nodeWidth) / 2);
-  const verticalPadding = minimumHeight > 0 ? Math.max(40, (minimumHeight - nodeHeight) / 2) : 40;
+  const verticalPadding = 40;
   const visible = new Set(nodes.map((node) => node.id));
   const incoming = new Map();
   for (const edge of edges) {

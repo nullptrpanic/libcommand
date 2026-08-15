@@ -85,6 +85,10 @@ the same AST.
   simulated path.
 - Repeated loop executions increment one AST node's execution count; Runtime
   still shows each concrete command call separately.
+- AST graphs start at the top center. Sequential bodies advance downward;
+  alternative bodies share a row and rejoin before the following statement.
+  Live following keeps the active node horizontally centered and scrolls
+  vertically only enough to keep it visible with context.
 
 The memory figures are `libcommand`'s logical retained-state accounting used by
 `MaxMemoryBytes`. They are useful for understanding path growth and budget

@@ -4,6 +4,7 @@ import {
   concreteDisplayValue,
   createASTFlowModel,
   createRuntimeFlowModel,
+  flowScrollTarget,
   formatBytes,
   layoutASTFlowGraph,
   layoutFlowGraph,
@@ -816,10 +817,13 @@ function renderGraph(model, preserveSelection = false) {
     ? renderedNodes.find((node) => node.id === selectedNodeID)
     : renderedNodes.find((node) => node.executed) || renderedNodes[0];
   selectNode(selected.id);
+  const selectedElement = elements.flow_nodes.querySelector(`[data-node-id="${CSS.escape(selected.id)}"]`);
   if (preserveSelection && activeNodeID) {
     const active = elements.flow_nodes.querySelector(`[data-node-id="${CSS.escape(activeNodeID)}"]`);
     active?.classList.add("current");
-    centerActiveNode(active);
+    followFlowNode(active);
+  } else if (!preserveSelection) {
+    followFlowNode(selectedElement, "auto", true);
   }
 }
 
@@ -1150,14 +1154,22 @@ function scheduleGraphRelayout() {
   });
 }
 
-function centerActiveNode(element) {
+function followFlowNode(element, behavior = "smooth", resetTop = false) {
   if (!element || elements.flow_scroll.classList.contains("hidden")) return;
-  const left = element.offsetLeft * zoom - (elements.flow_scroll.clientWidth - element.offsetWidth * zoom) / 2;
-  const top = element.offsetTop * zoom - (elements.flow_scroll.clientHeight - element.offsetHeight * zoom) / 2;
+  const target = flowScrollTarget({
+    left: element.offsetLeft * zoom,
+    top: element.offsetTop * zoom,
+    width: element.offsetWidth * zoom,
+    height: element.offsetHeight * zoom,
+  }, {
+    width: elements.flow_scroll.clientWidth,
+    height: elements.flow_scroll.clientHeight,
+    scrollTop: elements.flow_scroll.scrollTop,
+  }, resetTop);
   elements.flow_scroll.scrollTo({
-    left: Math.max(0, left),
-    top: Math.max(0, top),
-    behavior: "smooth",
+    left: target.left,
+    top: target.top,
+    behavior,
   });
 }
 

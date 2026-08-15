@@ -8,6 +8,7 @@ import {
   buildFlowModels,
   createASTFlowModel,
   createRuntimeFlowModel,
+  flowScrollTarget,
   formatBytes,
   layoutASTFlowGraph,
   layoutFlowGraph,
@@ -139,13 +140,13 @@ test("AST connects visible syntax through an embedded structural parent", () => 
   const model = buildFlowModel({
     nodes: [
       node(1, 0, "operator", "producer | { consumer; }"),
-      { ...node(2, 1, "block", "{ consumer; }"), embedded: true },
+      { ...node(2, 1, "block", "{ consumer; }"), embedded: true, flowGroup: 1 },
       node(3, 2, "command", "consumer"),
     ],
   });
 
   assert.deepEqual(model.nodes.map((item) => item.nodeID), [1, 3]);
-  assert.ok(model.edges.some((edge) => edge.from === "ast:1" && edge.to === "ast:3"));
+  assert.ok(model.edges.some((edge) => edge.from === "ast:1" && edge.to === "ast:3" && edge.flowGroup === 1));
 });
 
 test("streamed events cannot reveal an embedded AST node before the run finishes", () => {
@@ -343,34 +344,42 @@ test("layoutFlowGraph separates forked paths into horizontal lanes", () => {
   assert.notEqual(left.x, right.x);
 });
 
-test("layoutASTFlowGraph follows syntax preorder instead of placing siblings beside each other", () => {
+test("layoutASTFlowGraph aligns alternative branches and advances after their subtree", () => {
   const nodes = [
     { id: "ast:1", nodeID: 1, definition: { parentId: 0 } },
-    { id: "ast:2", nodeID: 2, definition: { parentId: 1 } },
-    { id: "ast:3", nodeID: 3, definition: { parentId: 2 } },
-    { id: "ast:4", nodeID: 4, definition: { parentId: 2 } },
-    { id: "ast:5", nodeID: 5, definition: { parentId: 1 } },
-    { id: "ast:6", nodeID: 6, definition: { parentId: 0 } },
+    { id: "ast:2", nodeID: 2, definition: { parentId: 0 } },
+    { id: "ast:3", nodeID: 3, definition: { parentId: 2, flowGroup: 0 } },
+    { id: "ast:4", nodeID: 4, definition: { parentId: 0 } },
+    { id: "ast:5", nodeID: 5, definition: { parentId: 4, flowGroup: 0 } },
+    { id: "ast:6", nodeID: 6, definition: { parentId: 5, flowGroup: 0 } },
+    { id: "ast:7", nodeID: 7, definition: { parentId: 5, flowGroup: 1 } },
+    { id: "ast:8", nodeID: 8, definition: { parentId: 4, flowGroup: 0 } },
+    { id: "ast:9", nodeID: 9, definition: { parentId: 0 } },
   ];
   const edges = [
-    { from: "ast:1", to: "ast:2", structural: true },
-    { from: "ast:2", to: "ast:3", structural: true },
-    { from: "ast:2", to: "ast:4", structural: true },
-    { from: "ast:1", to: "ast:5", structural: true },
-    { from: "ast:5", to: "ast:6", structural: false },
+    { from: "ast:1", to: "ast:2", structural: false },
+    { from: "ast:2", to: "ast:3", structural: true, flowGroup: 0 },
+    { from: "ast:3", to: "ast:4", structural: false },
+    { from: "ast:4", to: "ast:5", structural: true, flowGroup: 0 },
+    { from: "ast:5", to: "ast:6", structural: true, flowGroup: 0 },
+    { from: "ast:5", to: "ast:7", structural: true, flowGroup: 1 },
+    { from: "ast:4", to: "ast:8", structural: true, flowGroup: 0 },
+    { from: "ast:8", to: "ast:9", structural: false },
   ];
 
   const layout = layoutASTFlowGraph(nodes, edges, 1000, 800);
   const positions = nodes.map((node) => layout.positions.get(node.id));
 
-  assert.deepEqual(positions.map((position) => position.y), [...positions.map((position) => position.y)].sort((left, right) => left - right));
-  assert.ok(positions[1].x > positions[0].x);
-  assert.ok(positions[2].x > positions[1].x);
-  assert.equal(positions[4].x, positions[1].x);
-  assert.ok(positions[4].y > positions[3].y);
+  assert.equal(positions[5].y, positions[6].y);
+  assert.notEqual(positions[5].x, positions[6].x);
+  assert.ok(positions[7].y > positions[5].y);
+  assert.ok(positions[8].y > positions[7].y);
+  assert.equal(positions[0].x, positions[1].x);
+  assert.equal(positions[1].x, positions[3].x);
+  assert.equal(positions[3].x, positions[8].x);
 });
 
-test("layoutASTFlowGraph leaves enough margin to center its first and last nodes", () => {
+test("flow layouts start at the top and center their first node horizontally", () => {
   const nodes = [
     { id: "ast:1", nodeID: 1, definition: { parentId: 0 } },
     { id: "ast:2", nodeID: 2, definition: { parentId: 0 } },
@@ -380,8 +389,30 @@ test("layoutASTFlowGraph leaves enough margin to center its first and last nodes
   const last = layout.positions.get("ast:2");
 
   assert.equal(first.x, (1000 - layout.nodeWidth) / 2);
-  assert.equal(first.y, (800 - layout.nodeHeight) / 2);
-  assert.equal(layout.height - last.y - layout.nodeHeight, first.y);
+  assert.equal(first.y, 40);
+  assert.ok(last.y > first.y);
+
+  const runtime = layoutFlowGraph([{ id: "runtime:1", pathID: 1 }], [], 1000, 800);
+  assert.equal(runtime.positions.get("runtime:1").y, 40);
+});
+
+test("flowScrollTarget centers horizontally and follows vertically without centering", () => {
+  const viewport = { width: 600, height: 500, scrollTop: 0 };
+  const target = flowScrollTarget({ left: 700, top: 620, width: 200, height: 100 }, viewport);
+
+  assert.equal(target.left, 500);
+  assert.equal(target.top, 268);
+  assert.notEqual(target.top + viewport.height / 2, 670);
+
+  assert.deepEqual(flowScrollTarget({ left: 200, top: 180, width: 200, height: 100 }, {
+    width: 600,
+    height: 500,
+    scrollTop: 100,
+  }), { left: 0, top: 100 });
+  assert.deepEqual(flowScrollTarget({ left: 700, top: 620, width: 200, height: 100 }, viewport, true), {
+    left: 500,
+    top: 0,
+  });
 });
 
 test("buildFlowModel keeps known unexecuted syntax dashed", () => {
