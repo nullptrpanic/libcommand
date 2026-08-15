@@ -1,0 +1,9 @@
+.*
+!.gitignore
+/AGENTS.md
+/docs/
+/spec/
+/specs/
+/scripts/
+/target/
+superpowers
