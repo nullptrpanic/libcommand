@@ -477,7 +477,7 @@ function advanceLiveFlow() {
   currentModel = model;
   if (changed) renderGraph(model, true);
 
-  const perspectiveLabel = currentFlowPerspective === "ast" ? "AST nodes" : "runtime nodes";
+  const perspectiveLabel = currentFlowPerspective === "ast" ? "AST nodes" : "runtime commands";
   if (liveFinalResponse) {
     setStatus("Drawing simulation flow", `${model.nodes.length} ${perspectiveLabel} visible · simulation already complete`, "DRAWING");
   } else {
@@ -592,11 +592,11 @@ function beginLiveFlow(source) {
   elements.flow_empty.querySelector("h2").textContent = astActive ? "Waiting for AST execution" : "Waiting for runtime execution";
   elements.flow_empty.querySelector("p").textContent = astActive
     ? "Parsed syntax stays visible while reached nodes are highlighted in execution order."
-    : "Control statements and expanded command calls appear here as the simulator reaches them.";
+    : "Expanded command calls appear here as the simulator reaches them.";
   elements.inspector_id.textContent = "NO SELECTION";
   elements.inspector.replaceChildren(createElement("div", "inspector-empty", astActive
     ? "Execution details appear as the simulator reaches each AST node."
-    : "The current execution context will appear when the simulator reaches a control statement or command call."));
+    : "The current execution context will appear when the simulator reaches a command call."));
   renderOutputs([], "");
   renderInvocations([]);
   elements.diagnostics_view.replaceChildren(createElement("div", "inspector-empty", "Diagnostics are available after simulation completes."));
@@ -650,9 +650,9 @@ function stopLiveRun() {
   currentModel = currentModels[currentFlowPerspective] || model;
   activeNodeID = "";
   renderGraph(currentModel, true);
-  setStatus("Simulation stopped", `${model.nodes.length} runtime nodes retained`, "STOPPED");
+  setStatus("Simulation stopped", `${model.nodes.length} runtime commands retained`, "STOPPED");
   updateLiveControls(workerWasRunning ? "Restarting WASM" : "Run simulation");
-  showToast("Simulation stopped. Visible runtime nodes were retained.");
+  showToast("Simulation stopped. Visible runtime commands were retained.");
   if (workerWasRunning) {
     startWorker();
   } else if (astPreviewDeferred) {

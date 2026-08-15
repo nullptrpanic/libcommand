@@ -10,7 +10,10 @@ export function buildFlowModels(response = {}) {
 }
 
 function buildASTFlowModel(response = {}) {
-  const ast = createASTFlowModel(response.nodes || []);
+  const nodes = response.nodes || [];
+  const ast = createASTFlowModel(Number.isInteger(response.astNodeCount)
+    ? nodes.slice(0, response.astNodeCount)
+    : nodes);
   for (const event of [...(response.events || [])].sort((left, right) => left.sequence - right.sequence)) {
     ast.append(event);
   }
@@ -29,6 +32,7 @@ export function createASTFlowModel(initialDefinitions = []) {
   const paths = new Set();
   let edgeByTransition = new Map();
   let topologyDirty = false;
+  let topologyFrozen = false;
   const model = {
     perspective: "ast",
     nodes: [],
@@ -102,7 +106,7 @@ export function createASTFlowModel(initialDefinitions = []) {
   }
 
   function syntaxNode(event, fallbackToActive = false) {
-    if (event.nodeId && !nodeByDefinitionID.has(event.nodeId)) {
+    if (!topologyFrozen && event.nodeId && !nodeByDefinitionID.has(event.nodeId)) {
       addDefinition(event.node || definitions.get(event.nodeId) || unknownDefinition(event.nodeId));
     }
     if (definitions.get(event.nodeId)?.embedded) return null;
@@ -270,7 +274,8 @@ export function createASTFlowModel(initialDefinitions = []) {
     let activated = false;
     model.maximumSequence = Math.max(model.maximumSequence, event.sequence || 0);
     markPath(event);
-    if (event.node?.id) changed = addDefinition(event.node) || changed;
+    if (event.kind !== "node_discovered" && event.kind !== "simulation_started") topologyFrozen = true;
+    if (!topologyFrozen && event.node?.id) changed = addDefinition(event.node) || changed;
     if (event.kind !== "node_discovered") ensureTopology();
 
     switch (event.kind) {
@@ -395,7 +400,6 @@ export function createASTFlowModel(initialDefinitions = []) {
   }
 
   function finish(response = {}) {
-    addDefinitions(response.nodes || []);
     ensureTopology();
     model.peakLogicalBytes = Math.max(model.peakLogicalBytes, response.peakLogicalBytes || 0, peakLogicalBytes(model.nodes));
     model.truncated = Boolean(response.truncated);
@@ -626,7 +630,6 @@ export function createRuntimeFlowModel(nodes = []) {
   };
   const nodeByID = new Map();
   const callStacks = new Map();
-  const controlStacks = new Map();
   const lastByPath = new Map();
   const nextEdgeUnresolved = new Set();
   const paths = new Set();
@@ -659,12 +662,6 @@ export function createRuntimeFlowModel(nodes = []) {
     return occurrence;
   }
 
-  function appendControlOccurrence(event) {
-    const definition = definitions.get(event.nodeId) || event.node;
-    if (!runtimeControlDefinition(definition)) return null;
-    return appendOccurrence(event, definition);
-  }
-
   function append(event = {}) {
     let changed = false;
     if (event.node?.id) definitions.set(event.node.id, event.node);
@@ -674,53 +671,6 @@ export function createRuntimeFlowModel(nodes = []) {
     model.pathCount = paths.size;
     model.peakLogicalBytes = Math.max(model.peakLogicalBytes, event.memory?.aggregateBytes || 0);
     switch (event.kind) {
-      case "statement_started": {
-        const occurrence = appendControlOccurrence(event);
-        if (!occurrence) break;
-        const stack = [...(controlStacks.get(event.pathId) || []), {
-          nodeID: event.nodeId,
-          occurrenceID: occurrence.id,
-        }];
-        controlStacks.set(event.pathId, stack);
-        changed = true;
-        break;
-      }
-
-      case "statement_activated": {
-        const occurrence = appendControlOccurrence(event);
-        if (!occurrence) break;
-        const stack = [...(controlStacks.get(event.pathId) || [])];
-        const activeIndex = stack.findLastIndex((entry) => entry.nodeID === event.nodeId);
-        if (activeIndex < 0) {
-          stack.push({ nodeID: event.nodeId, occurrenceID: occurrence.id });
-        } else {
-          stack[activeIndex] = { nodeID: event.nodeId, occurrenceID: occurrence.id };
-        }
-        controlStacks.set(event.pathId, stack);
-        changed = true;
-        break;
-      }
-
-      case "statement_finished": {
-        const definition = definitions.get(event.nodeId) || event.node;
-        if (!runtimeControlDefinition(definition)) break;
-        const stack = [...(controlStacks.get(event.pathId) || [])];
-        const activeIndex = stack.findLastIndex((entry) => entry.nodeID === event.nodeId);
-        if (activeIndex < 0) break;
-        const [active] = stack.splice(activeIndex, 1);
-        controlStacks.set(event.pathId, stack);
-        const occurrence = nodeByID.get(active.occurrenceID);
-        if (!occurrence) break;
-        occurrence.endSequence = event.sequence;
-        occurrence.memory = event.memory || occurrence.memory;
-        occurrence.steps = event.steps || occurrence.steps;
-        occurrence.status = event.status;
-        occurrence.outputSnapshot = displaySnapshot(event.snapshot) || occurrence.outputSnapshot;
-        occurrence.outputSnapshotTruncated ||= Boolean(event.snapshotTruncated);
-        changed = true;
-        break;
-      }
-
       case "command_started": {
         const hidden = runtimeContainerCommand(event.invocation?.name);
         let occurrence = null;
@@ -767,7 +717,6 @@ export function createRuntimeFlowModel(nodes = []) {
         for (const childPath of event.childPathIds || []) {
           if (previous) lastByPath.set(childPath, previous);
           callStacks.set(childPath, [...(callStacks.get(parentPath) || [])]);
-          controlStacks.set(childPath, (controlStacks.get(parentPath) || []).map((entry) => ({ ...entry })));
           nextEdgeUnresolved.add(childPath);
         }
         break;
@@ -876,11 +825,6 @@ function runtimeContainerCommand(name) {
   return name === "eval" || name === "source" || name === ".";
 }
 
-function runtimeControlDefinition(definition) {
-  return definition && !definition.embedded
-    && (definition.kind === "loop" || definition.kind === "condition");
-}
-
 function invocationText(invocation) {
   return [invocation.name, ...(invocation.args || []).map(formatInvocationArgument)].filter(Boolean).join(" ");
 }
@@ -964,7 +908,7 @@ export function layoutASTFlowGraph(nodes, edges, minimumWidth = 720, minimumHeig
     const childrenWidth = groups.length
       ? groups.reduce((total, group) => total + group.width, 0) + horizontalGap * (groups.length - 1)
       : 0;
-    const sideBranchWidth = node.definition.flowCanSkip && groups.length === 1
+    const sideBranchWidth = optionalSideBranch(node, groups)
       ? nodeWidth + 2 * (horizontalGap + groups[0].width)
       : 0;
     subtreeWidth.set(node.id, Math.max(nodeWidth, childrenWidth, sideBranchWidth));
@@ -995,7 +939,7 @@ export function layoutASTFlowGraph(nodes, edges, minimumWidth = 720, minimumHeig
     });
     const groups = groupLayout.get(task.node.id) || [];
     if (!groups.length) continue;
-    if (task.node.definition.flowCanSkip && groups.length === 1) {
+    if (optionalSideBranch(task.node, groups)) {
       const nodeLeft = task.left + (task.width - nodeWidth) / 2;
       tasks.push({
         type: "sequence",
@@ -1098,6 +1042,10 @@ export function layoutASTFlowGraph(nodes, edges, minimumWidth = 720, minimumHeig
     width,
     height: Math.max(minimumHeight, verticalPadding * 2 + nodeHeight + Math.max(0, maximumLevel) * verticalPitch),
   };
+}
+
+function optionalSideBranch(node, groups) {
+  return node.definition.kind === "condition" && node.definition.flowCanSkip && groups.length === 1;
 }
 
 export function layoutFlowGraph(nodes, edges, minimumWidth = 720, minimumHeight = 0) {

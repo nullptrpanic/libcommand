@@ -469,10 +469,10 @@ memory snapshots.
 
 ### Playground preview
 
-**Live Runtime flow.** Actual loop and condition visits appear alongside
-expanded commands in execution order. Re-entered control statements are shown
-and highlighted again while graph position, logical memory, and the node
-inspector follow the simulation.
+**Live Runtime flow.** Expanded command calls appear in execution order. Every
+call is a distinct occurrence; alternatives explored from one unresolved fork
+share a row while graph position, logical memory, and the node inspector follow
+the simulation.
 
 ![Playground building a live Runtime command flow and inspecting command output](assets/playground/runtime-flow.gif)
 
@@ -480,12 +480,12 @@ inspector follow the simulation.
 clicks **Run simulation**. The parsed topology stays fixed while reached nodes
 are highlighted in execution order; unreached syntax remains dashed. Nested
 evaluation details are folded into their owning statement, while real branch
-and loop bodies remain visible. Syntax dynamically parsed by `eval`, including
-the final `lark-cli` call, is attached to the same AST as it is discovered.
-Runtime transitions never synthesize AST edges; loops remain a forward static
-sequence without iteration back edges or zero-iteration bypass edges.
+and loop bodies remain visible. Syntax dynamically parsed by `eval` or `source`
+is shown only as concrete calls in Runtime and never changes the initial AST.
+Runtime transitions never synthesize AST nodes or edges; loops remain a forward
+static sequence without iteration back edges or zero-iteration bypass edges.
 
-![Playground highlighting a stable AST through Base64 decoding, eval, and the dynamically parsed lark-cli call](assets/playground/ast-flow.gif)
+![Playground highlighting a stable AST while the simulation executes](assets/playground/ast-flow.gif)
 
 ```bash
 make playground

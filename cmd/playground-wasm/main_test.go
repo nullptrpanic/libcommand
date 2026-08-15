@@ -141,6 +141,21 @@ func TestAnalyzeStreamsDynamicNodesBeforeTheirExecution(t *testing.T) {
 	if discoveredSequence == 0 || startedSequence == 0 || discoveredSequence >= startedSequence {
 		t.Fatalf("dynamic node stream order = discovered %d, started %d", discoveredSequence, startedSequence)
 	}
+	foundDynamic := false
+	for _, node := range response.Nodes {
+		foundDynamic = foundDynamic || node.Snippet == "echo dynamic"
+	}
+	if !foundDynamic {
+		t.Fatalf("runtime nodes = %#v, want dynamically parsed command", response.Nodes)
+	}
+	if response.ASTNodeCount == 0 || response.ASTNodeCount >= len(response.Nodes) {
+		t.Fatalf("static node count = %d, runtime nodes = %d", response.ASTNodeCount, len(response.Nodes))
+	}
+	for _, node := range response.Nodes[:response.ASTNodeCount] {
+		if node.Snippet == "echo dynamic" {
+			t.Fatalf("static AST nodes = %#v, must not include dynamically parsed command", response.Nodes[:response.ASTNodeCount])
+		}
+	}
 }
 
 func TestAnalyzeRecordsUnregisteredCommandAsUnresolved(t *testing.T) {

@@ -41,57 +41,75 @@ test("live controls distinguish idle running and paused sessions", () => {
   });
 });
 
-test("runtime flow grows when control and command events arrive", () => {
+test("runtime flow grows only when command events arrive", () => {
   const runtime = createRuntimeFlowModel();
   runtime.append({ kind: "node_discovered", node: node(1, 0, "loop", "for item in values") });
   runtime.append(event(1, "statement_started", 1, 1));
   runtime.append({ kind: "node_discovered", node: node(2, 0, "command", "echo live") });
   runtime.append(commandStarted(2, 2, "echo", [{ kind: 0, value: "live" }]));
 
-  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.snippet), ["for item in values", "echo live"]);
-  assert.equal(runtime.model.nodes[1].commandResult, null);
+  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.snippet), ["echo live"]);
+  assert.equal(runtime.model.nodes[0].commandResult, null);
 
   runtime.append(commandFinished(3, 2, { exitCode: 0, stdout: "live\n", outputCaptured: true }));
 
-  assert.equal(runtime.model.nodes.length, 2);
-  assert.equal(runtime.model.nodes[1].commandResult.stdout, "live\n");
+  assert.equal(runtime.model.nodes.length, 1);
+  assert.equal(runtime.model.nodes[0].commandResult.stdout, "live\n");
   assert.equal(runtime.model.maximumSequence, 3);
 });
 
-test("runtime flow records every loop and condition re-entry in execution order", () => {
+test("runtime flow keeps forked command occurrences distinct and aligns alternatives", () => {
   const runtime = createRuntimeFlowModel([
-    node(1, 0, "loop", "for i in one two three"),
+    node(1, 0, "command", "prepare"),
+    node(2, 0, "condition", "if unresolved"),
+    node(3, 2, "command", "command1"),
+    { ...node(4, 2, "command", "command2"), flowGroup: 1 },
+  ]);
+  const events = [
+    commandStarted(1, 1, "prepare"),
+    commandFinished(2, 1),
+    event(3, "statement_started", 2, 1),
+    { sequence: 4, kind: "path_forked", nodeId: 2, pathId: 1, parentPathId: 1, childPathIds: [2, 3] },
+    commandStarted(5, 3, "command1", [], 2),
+    commandFinished(6, 3, { exitCode: 0 }, 2),
+    commandStarted(7, 4, "command2", [], 3),
+    commandFinished(8, 4, { exitCode: 0 }, 3),
+  ];
+  for (const current of events) runtime.append(current);
+
+  assert.deepEqual(runtime.model.nodes.map((item) => item.id), ["runtime:1", "runtime:5", "runtime:7"]);
+  assert.deepEqual(runtime.model.edges.map((edge) => [edge.from, edge.to]), [
+    ["runtime:1", "runtime:5"],
+    ["runtime:1", "runtime:7"],
+  ]);
+  const layout = layoutFlowGraph(runtime.model.nodes, runtime.model.edges);
+  const left = layout.positions.get("runtime:5");
+  const right = layout.positions.get("runtime:7");
+  assert.equal(left.y, right.y);
+  assert.notEqual(left.x, right.x);
+});
+
+test("runtime flow omits shell control events and keeps command execution order", () => {
+  const runtime = createRuntimeFlowModel([
+    node(1, 0, "loop", "for i in one two"),
     node(2, 1, "condition", "if (( i == 1 ))"),
     node(3, 1, "command", "lark-cli send"),
   ]);
   const events = [
     event(1, "statement_started", 1, 1),
     event(2, "statement_started", 2, 1),
-    event(3, "statement_finished", 2, 1),
-    commandStarted(4, 3, "lark-cli", [{ kind: 0, value: "send" }]),
-    commandFinished(5, 3),
-    event(6, "statement_activated", 1, 1),
-    event(7, "statement_started", 2, 1),
-    event(8, "statement_finished", 2, 1),
-    commandStarted(9, 3, "lark-cli", [{ kind: 0, value: "send" }]),
-    commandFinished(10, 3),
+    commandStarted(3, 3, "lark-cli", [{ kind: 0, value: "send" }]),
+    commandFinished(4, 3),
+    event(5, "statement_activated", 1, 1),
+    event(6, "statement_started", 2, 1),
+    commandStarted(7, 3, "lark-cli", [{ kind: 0, value: "send" }]),
+    commandFinished(8, 3),
   ];
   for (const current of events) runtime.append(current);
 
-  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), [
-    "loop", "condition", "command", "loop", "condition", "command",
-  ]);
-  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.snippet), [
-    "for i in one two three", "if (( i == 1 ))", "lark-cli send",
-    "for i in one two three", "if (( i == 1 ))", "lark-cli send",
-  ]);
-  assert.deepEqual(runtime.model.edges.map((edge) => [edge.from, edge.to]), [
-    ["runtime:1", "runtime:2"],
-    ["runtime:2", "runtime:4"],
-    ["runtime:4", "runtime:6"],
-    ["runtime:6", "runtime:7"],
-    ["runtime:7", "runtime:9"],
-  ]);
+  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), ["command", "command"]);
+  assert.deepEqual(runtime.model.nodes.map((item) => item.id), ["runtime:3", "runtime:7"]);
+  assert.deepEqual(runtime.model.edges.map((edge) => [edge.from, edge.to]), [["runtime:3", "runtime:7"]]);
 });
 
 test("advanceRuntimeFlow reveals at most one runtime node per visual step", () => {
@@ -106,18 +124,14 @@ test("advanceRuntimeFlow reveals at most one runtime node per visual step", () =
   ];
 
   const first = advanceRuntimeFlow(runtime, events, 0);
-  assert.deepEqual(first, { next: 2, changed: true, revealed: true });
-  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), ["loop"]);
+  assert.deepEqual(first, { next: 3, changed: true, revealed: true });
+  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), ["command"]);
 
   const second = advanceRuntimeFlow(runtime, events, first.next);
-  assert.deepEqual(second, { next: 3, changed: true, revealed: true });
-  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), ["loop", "command"]);
+  assert.deepEqual(second, { next: 5, changed: true, revealed: true });
+  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), ["command", "command"]);
 
-  const third = advanceRuntimeFlow(runtime, events, second.next);
-  assert.deepEqual(third, { next: 5, changed: true, revealed: true });
-  assert.deepEqual(runtime.model.nodes.map((item) => item.definition.kind), ["loop", "command", "command"]);
-
-  const finished = advanceRuntimeFlow(runtime, events, third.next);
+  const finished = advanceRuntimeFlow(runtime, events, second.next);
   assert.deepEqual(finished, { next: 6, changed: true, revealed: false });
 });
 
@@ -151,8 +165,8 @@ test("buildFlowModels separates complete AST syntax from actual runtime executio
   assert.deepEqual(models.ast.nodes.map((item) => item.nodeID).sort((left, right) => left - right), [1, 2, 3]);
   assert.equal(models.ast.nodes.find((item) => item.nodeID === 2).executed, true);
   assert.equal(models.ast.nodes.find((item) => item.nodeID === 3).state, "not-executed");
-  assert.deepEqual(models.runtime.nodes.map((item) => item.definition.kind), ["condition", "command"]);
-  assert.equal(models.runtime.nodes[1].invocation.name, "echo");
+  assert.deepEqual(models.runtime.nodes.map((item) => item.definition.kind), ["command"]);
+  assert.equal(models.runtime.nodes[0].invocation.name, "echo");
 });
 
 test("AST folds embedded evaluation details while runtime keeps executed commands", () => {
@@ -178,7 +192,7 @@ test("AST folds embedded evaluation details while runtime keeps executed command
 
   assert.deepEqual(models.ast.nodes.map((item) => item.nodeID), [1, 3, 5, 6]);
   assert.equal(models.ast.nodes.find((item) => item.nodeID === 3).state, "unresolved");
-  assert.deepEqual(models.runtime.nodes.map((item) => item.definition.kind), ["loop", "command", "condition", "command"]);
+  assert.deepEqual(models.runtime.nodes.map((item) => item.definition.kind), ["command", "command"]);
   assert.deepEqual(models.runtime.nodes.filter((item) => item.invocation).map((item) => item.invocation.name), ["seq", "lark-cli"]);
 });
 
@@ -667,21 +681,31 @@ test("runtime flow uses expanded command order and hides eval containers", () =>
   ]), [["echo", "base64"], ["base64", "lark-cli"]]);
 });
 
-test("AST flow retains syntax discovered while eval is executing", () => {
+test("complete AST flow excludes syntax discovered while eval is executing", () => {
+  const initial = node(1, 0, "command", "eval \"$decoded\"");
   const dynamic = node(2, 1, "command", "lark-cli im messages-send");
   const model = buildFlowModel({
-    nodes: [node(1, 0, "command", "eval \"$decoded\"")],
+    nodes: [initial, dynamic],
+    astNodeCount: 1,
     events: [
-      { sequence: 1, kind: "node_discovered", node: dynamic },
-      event(2, "statement_started", 2, 1),
-      event(3, "statement_finished", 2, 1),
+      event(1, "statement_started", 1, 1),
+      { sequence: 2, kind: "node_discovered", node: dynamic },
+      event(3, "statement_started", 2, 1),
     ],
   });
 
-  const executed = model.nodes.find((item) => item.nodeID === 2 && item.executed);
-  assert.equal(executed.definition.snippet, "lark-cli im messages-send");
-  assert.equal(model.definitions.get(2).snippet, "lark-cli im messages-send");
-  assert.ok(model.edges.some((edge) => edge.from === "ast:1" && edge.to === "ast:2"));
+  assert.deepEqual(model.nodes.map((item) => item.nodeID), [1]);
+  assert.equal(model.definitions.has(2), false);
+});
+
+test("AST flow ignores syntax discovered after execution starts", () => {
+  const ast = createASTFlowModel([node(1, 0, "command", "eval \"$decoded\"")]);
+  ast.append(event(1, "statement_started", 1, 1));
+  ast.append({ sequence: 2, kind: "node_discovered", node: node(2, 1, "command", "lark-cli send") });
+  ast.append(event(3, "statement_started", 2, 1));
+
+  assert.deepEqual(ast.model.nodes.map((item) => item.nodeID), [1]);
+  assert.equal(ast.model.definitions.has(2), false);
 });
 
 test("runtime flow marks an unregistered command unresolved", () => {
@@ -842,6 +866,26 @@ test("layoutASTFlowGraph does not add runtime rails to static nested loops", () 
   const layout = layoutASTFlowGraph(model.nodes, model.edges, 1000, 800);
 
   assert.equal(layout.edgeRoutes.size, 0);
+});
+
+test("layoutASTFlowGraph keeps loop bodies and following statements on the main line", () => {
+  const model = buildFlowModel({
+    nodes: [
+      { ...node(1, 0, "loop", "for item in values"), flowCanSkip: true },
+      node(2, 1, "condition", "if selected"),
+      node(3, 2, "command", "left"),
+      { ...node(4, 2, "command", "right"), flowGroup: 1 },
+      node(5, 1, "command", "inside after branch"),
+      node(6, 0, "command", "after loop"),
+    ],
+  });
+  const layout = layoutASTFlowGraph(model.nodes, model.edges, 1000, 800);
+  const mainX = layout.positions.get("ast:1").x;
+
+  assert.equal(layout.positions.get("ast:2").x, mainX);
+  assert.equal(layout.positions.get("ast:5").x, mainX);
+  assert.equal(layout.positions.get("ast:6").x, mainX);
+  assert.notEqual(layout.positions.get("ast:3").x, layout.positions.get("ast:4").x);
 });
 
 test("layoutASTFlowGraph handles deeply nested syntax without recursive stack growth", () => {

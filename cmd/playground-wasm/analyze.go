@@ -55,6 +55,7 @@ type playgroundInvocation struct {
 
 type playgroundResponse struct {
 	Nodes            []*libcommand.TraceNode  `json:"nodes"`
+	ASTNodeCount     int                      `json:"astNodeCount"`
 	Events           []*libcommand.TraceEvent `json:"events"`
 	Invocations      []*playgroundInvocation  `json:"invocations"`
 	Outputs          []*playgroundPathOutput  `json:"outputs"`
@@ -89,7 +90,7 @@ func parseSourceJSON(encoded string) string {
 	if err != nil {
 		return encodePlaygroundResponse(&playgroundResponse{Error: fmt.Sprintf("parse bash: %v", err)})
 	}
-	return encodePlaygroundResponse(&playgroundResponse{Nodes: nodes})
+	return encodePlaygroundResponse(&playgroundResponse{Nodes: nodes, ASTNodeCount: len(nodes)})
 }
 
 func analyzeJSONWithTrace(encoded string, stream func(*libcommand.TraceEvent)) string {
@@ -176,6 +177,7 @@ func analyzeWithTrace(request *playgroundRequest, maximumEvents int, stream func
 	collectedBytes := 0
 	outputBytes := 0
 	traceTruncated := false
+	collectingASTNodes := true
 	observer := func(event *libcommand.TraceEvent) bool {
 		recordPlaygroundOutput(response, event, &outputBytes)
 		if event.SnapshotTruncated {
@@ -203,8 +205,14 @@ func analyzeWithTrace(request *playgroundRequest, maximumEvents int, stream func
 		collectedBytes += eventBytes
 		if event.Kind == libcommand.TraceNodeDiscovered {
 			response.Nodes = append(response.Nodes, event.Node)
+			if collectingASTNodes {
+				response.ASTNodeCount++
+			}
 		} else {
 			response.Events = append(response.Events, displayEvent)
+			if event.Kind != libcommand.TraceSimulationStarted {
+				collectingASTNodes = false
+			}
 		}
 		if stream != nil {
 			stream(displayEvent)

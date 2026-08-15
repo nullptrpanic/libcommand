@@ -41,10 +41,9 @@ make clean
 ### Live Runtime flow
 
 The Message loop example shows the Runtime graph being constructed from actual
-control-flow visits and expanded command calls. Nodes appear as trace events
-arrive, the active statement or call is highlighted and followed automatically,
-and selecting `lark-cli` exposes that node's concrete invocation and result in
-the inspector.
+expanded command calls. Nodes appear as trace events arrive, the active call is
+highlighted and followed automatically, and selecting `lark-cli` exposes that
+node's concrete invocation and result in the inspector.
 
 ![The Playground builds a live Runtime execution graph and inspects one lark-cli result](../assets/playground/runtime-flow.gif)
 
@@ -55,28 +54,28 @@ The parse-only topology remains in place while reached nodes gain their actual
 path, execution steps, and logical memory; syntax that no path reaches remains
 dashed. Nested condition commands, substitutions, and pipeline operands are
 folded into their owning statement; branch and loop bodies remain visible.
-When `eval` parses new source, its top-level `lark-cli` syntax is attached to
-the same AST.
+Commands parsed dynamically by `eval` or `source` appear in Runtime, while the
+initial AST remains unchanged.
 
-![The Playground highlights a stable AST through Base64 decoding, eval, and the dynamically parsed lark-cli call](../assets/playground/ast-flow.gif)
+![The Playground highlights a stable AST while the simulation executes](../assets/playground/ast-flow.gif)
 
 ## What the graph means
 
-- **Runtime** is the default perspective. It shows actual loop and condition
-  visits together with expanded command calls in execution order, including
-  commands produced by substitutions, `eval`, or `source`. Expansion containers
-  are omitted, so a decoded call is shown as the commands that produced it
-  followed by the command that ran. Loop headers and nested conditions appear
-  again on every real re-entry instead of being skipped during playback.
-  Unregistered commands are retained as purple unresolved nodes. Runtime nodes
-  come from Worker trace events received while simulation is active. The first
-  command appears immediately and later commands are revealed one per selected
-  speed interval, rather than replacing the canvas with a complete graph.
+- **Runtime** is the default perspective. It shows only expanded command calls
+  in execution order, including commands produced by substitutions, `eval`, or
+  `source`. Control statements and expansion containers are omitted, so a
+  decoded call is shown as the commands that produced it followed by the command
+  that ran. Every call is a separate occurrence; commands from alternative paths
+  under one unresolved fork share a row. Unregistered commands are retained as
+  purple unresolved nodes. Runtime nodes come from Worker trace events received
+  while simulation is active. The first command appears immediately and later
+  commands are revealed one per selected speed interval, rather than replacing
+  the canvas with a complete graph.
 - **AST** is available before simulation. A parse-only Worker request builds the
   current source's static syntax skeleton without executing Shell code or
-  command handlers. Simulation updates those same nodes in place and attaches
-  dynamically parsed `eval` and `source` content to the existing tree as it is
-  discovered. It folds trace nodes marked `Embedded`—condition evaluation,
+  command handlers. Simulation updates those same nodes in place but never adds
+  dynamically parsed `eval` or `source` content to the tree. It folds trace
+  nodes marked `Embedded`—condition evaluation,
   substitutions, and pipeline operands already represented by their parent—so
   control-flow bodies and calls remain readable. The complete detail remains in
   the trace, while Runtime retains its concrete command calls. Statements that
@@ -89,10 +88,10 @@ the same AST.
 - Every actual visit re-highlights the corresponding AST node. Loop headers and
   body statements therefore activate again on each iteration, while their
   execution count and inspector context retain the latest occurrence. Runtime
-  records every control-flow visit and concrete command call as a separate
-  occurrence.
-- AST graphs start at the top center. Sequential bodies advance downward;
-  alternative bodies share a row and rejoin before the following statement.
+  records every concrete command call as a separate occurrence.
+- AST graphs start at the top center. Sequential and loop bodies stay on the
+  main vertical line whenever possible; true alternative bodies share a row and
+  rejoin before the following statement.
   A condition without an exhaustive alternative retains a direct fallthrough
   edge. Loops remain one forward syntax sequence from header through body to
   the following statement; iteration back edges and zero-iteration bypasses
