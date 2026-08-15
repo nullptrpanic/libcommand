@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <meta name="description" content="Explore libcommand Bash execution paths locally in your browser.">
+  <title>libcommand Playground</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true">$_</span>
+        <span class="brand-name">libcommand playground</span>
+        <span class="version-badge">WASM</span>
+      </div>
+      <div class="top-actions">
+        <span class="local-badge"><i></i>100% local execution</span>
+        <label class="example-control">
+          <span class="sr-only">Example</span>
+          <select id="example-select">
+            <option value="messages">Message loop</option>
+            <option value="encoded">Base64 and eval</option>
+            <option value="limits">Execution limit</option>
+          </select>
+        </label>
+        <button id="share-button" class="quiet-button" type="button">Share</button>
+        <button id="stop-button" class="quiet-button stop-button hidden" type="button">Stop</button>
+        <button id="run-button" class="run-button" type="button" disabled>
+          <span class="run-icon">▶</span><span class="run-label">Loading WASM</span>
+        </button>
+      </div>
+    </header>
+
+    <main id="workspace" class="workspace">
+      <section class="pane input-pane" aria-label="Simulation input">
+        <div class="pane-header">
+          <span>Input workspace</span>
+          <button id="collapse-input" class="icon-button" type="button" title="Collapse input">‹</button>
+        </div>
+
+        <nav class="input-tabs" aria-label="Input type">
+          <button class="input-tab active" type="button" data-input-tab="script">Script</button>
+          <button class="input-tab" type="button" data-input-tab="commands">Commands</button>
+          <button class="input-tab" type="button" data-input-tab="environment">Environment</button>
+          <button class="input-tab" type="button" data-input-tab="arguments">Arguments</button>
+          <button class="input-tab" type="button" data-input-tab="stdin">Stdin</button>
+        </nav>
+
+        <div class="input-panels">
+          <section class="input-panel active" data-input-panel="script">
+            <div class="editor-toolbar">
+              <span><i class="file-dot"></i>command.sh</span>
+              <span>Bash · UTF-8 · <b id="line-total">1</b> lines</span>
+            </div>
+            <div class="editor-shell">
+              <pre id="line-numbers" aria-hidden="true">1</pre>
+              <div class="source-editor">
+                <pre id="source-highlight" aria-hidden="true"></pre>
+                <textarea id="source-input" aria-label="Bash source" spellcheck="false"></textarea>
+              </div>
+            </div>
+          </section>
+
+          <section class="input-panel commands-panel" data-input-panel="commands">
+            <div class="commands-toolbar">
+              <div>
+                <strong>Registered commands</strong>
+                <p>Return a fixed result, error, or synchronous JavaScript result. Exact names override builtins; <code>*</code> is the fallback.</p>
+              </div>
+              <button id="add-command" class="quiet-button" type="button">+ Add command</button>
+            </div>
+            <div id="commands-list" class="commands-list"></div>
+          </section>
+
+          <section class="input-panel form-panel" data-input-panel="environment">
+            <label for="environment-input">Environment variables</label>
+            <textarea id="environment-input" spellcheck="false" placeholder="TOKEN=value&#10;REGION=cn"></textarea>
+            <p>One exported <code>KEY=value</code> per line. Lines starting with <code>#</code> are ignored.</p>
+          </section>
+
+          <section class="input-panel form-panel" data-input-panel="arguments">
+            <label for="arguments-input">Positional arguments</label>
+            <textarea id="arguments-input" spellcheck="false" placeholder='["first", "second"]'></textarea>
+            <p>A JSON array initializes <code>$1</code>, <code>$2</code>, and <code>$@</code>.</p>
+          </section>
+
+          <section class="input-panel form-panel" data-input-panel="stdin">
+            <label for="stdin-input">Standard input</label>
+            <textarea id="stdin-input" spellcheck="false" placeholder="Input consumed by read, base64, pipelines…"></textarea>
+            <p>Empty input means immediate EOF.</p>
+          </section>
+        </div>
+
+        <div class="limits-bar">
+          <label>Steps<input id="steps-input" type="number" min="1" max="100000" value="10000"></label>
+          <label>Memory MiB<input id="memory-input" type="number" min="1" max="64" step="1" value="2"></label>
+          <label>Timeout ms<input id="timeout-input" type="number" min="250" max="30000" step="250" value="5000"></label>
+        </div>
+        <div id="input-resizer" class="input-resizer" aria-hidden="true"></div>
+      </section>
+
+      <section class="pane result-pane" aria-label="Simulation result">
+        <div class="result-header">
+          <button id="expand-input" class="expand-input hidden" type="button">Input ›</button>
+          <nav class="result-tabs" aria-label="Result type">
+            <button class="result-tab active" type="button" data-result-tab="flow">Flow graph</button>
+            <button class="result-tab" type="button" data-result-tab="outputs">Outputs <span id="output-count">0</span></button>
+            <button class="result-tab" type="button" data-result-tab="invocations">Invocations <span id="invocation-count">0</span></button>
+            <button class="result-tab" type="button" data-result-tab="diagnostics">Diagnostics <span id="diagnostic-count">0</span></button>
+            <button class="result-tab" type="button" data-result-tab="raw">Raw trace</button>
+          </nav>
+          <div class="flow-legend">
+            <span><i class="legend-current"></i>current</span>
+            <span><i class="legend-executed"></i>executed</span>
+            <span><i class="legend-unresolved"></i>unresolved</span>
+            <span><i class="legend-skipped"></i>not executed</span>
+          </div>
+        </div>
+
+        <section id="flow-view" class="result-view active">
+          <nav class="flow-perspectives" aria-label="Flowchart perspective">
+            <button class="flow-perspective active" type="button" data-flow-perspective="runtime" aria-pressed="true">Runtime</button>
+            <button class="flow-perspective" type="button" data-flow-perspective="ast" aria-pressed="false">AST</button>
+          </nav>
+          <div id="flow-empty" class="empty-state">
+            <div class="empty-orbit"><i></i><i></i><i></i></div>
+            <h2>Ready to explore</h2>
+            <p>Run the Bash source to replay statements, forks, command calls, and logical memory growth.</p>
+          </div>
+          <div id="flow-scroll" class="flow-scroll hidden">
+            <div id="flow-canvas" class="flow-canvas">
+              <svg id="flow-edges" aria-hidden="true"></svg>
+              <div id="flow-nodes"></div>
+            </div>
+          </div>
+          <div class="flow-controls">
+            <label class="speed-control flow-speed"><span>Speed</span><input id="speed-input" type="range" min="0.1" max="2" step="0.1" value="1" aria-label="Live flow speed"><output id="speed-value">1.0×</output></label>
+            <button id="zoom-out" class="icon-button" type="button" title="Zoom out">−</button>
+            <span id="zoom-value">100%</span>
+            <button id="zoom-in" class="icon-button" type="button" title="Zoom in">+</button>
+            <button id="zoom-reset" class="icon-button" type="button" title="Reset zoom">⌂</button>
+          </div>
+        </section>
+
+        <section id="outputs-view" class="result-view list-view" aria-label="Final path outputs"></section>
+        <section id="invocations-view" class="result-view list-view" aria-label="Invocations"></section>
+        <section id="diagnostics-view" class="result-view list-view" aria-label="Diagnostics"></section>
+        <section id="raw-view" class="result-view raw-view"><pre id="raw-output"></pre></section>
+      </section>
+
+      <aside class="pane inspector-pane" aria-label="Node inspector">
+        <div id="inspector-resizer" class="inspector-resizer" aria-hidden="true"></div>
+        <div class="pane-header"><span>Node inspector</span><span id="inspector-id" class="head-meta">NO SELECTION</span></div>
+        <nav class="inspector-tabs" aria-label="Node details">
+          <button class="inspector-tab active" type="button" data-inspector-tab="overview">Overview</button>
+          <button class="inspector-tab" type="button" data-inspector-tab="input">Input</button>
+          <button class="inspector-tab" type="button" data-inspector-tab="output">Output</button>
+        </nav>
+        <div id="inspector" class="inspector-content">
+          <div class="inspector-empty">Select a flow node to inspect its source, path, invocation, and logical retained memory.</div>
+        </div>
+      </aside>
+    </main>
+
+    <footer class="status-bar">
+      <div class="run-status">
+        <div><strong id="status-title">Initializing WebAssembly</strong><span id="status-duration">—</span></div>
+        <p id="status-detail">The Bash source stays in this browser.</p>
+      </div>
+      <div class="summary">
+        <div><span>Calls</span><strong id="summary-calls">0</strong></div>
+        <div><span>Paths</span><strong id="summary-paths">0</strong></div>
+        <div><span>Peak logical</span><strong id="summary-memory">0 B</strong></div>
+      </div>
+    </footer>
+  </div>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,4 @@
+go test fuzz v1
+string("taken")
+string("\x01_argument")
+[]byte("0")
