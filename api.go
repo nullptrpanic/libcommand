@@ -25,6 +25,15 @@ type SimulationRequest struct {
 	// Stdin initializes the finite standard-input stream. Nil and an empty
 	// slice both represent immediate EOF.
 	Stdin []byte
+	// Files initializes regular files in the isolated virtual filesystem.
+	// Relative paths are resolved against WorkingDir, and required parent
+	// directories are created. The simulator copies the map and its contents
+	// before evaluation.
+	Files map[string][]byte
+	// WorkingDir initializes PWD and the current directory. An empty value
+	// preserves the default root directory "/". Relative paths are resolved
+	// from that virtual root.
+	WorkingDir string
 }
 
 // Invocation is the expanded command passed to a registered command.

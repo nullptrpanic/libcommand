@@ -106,6 +106,14 @@ func adaptTestCommand(command testCommand) Command {
 	}
 }
 
+func newState(request *Request, maximum int) *State {
+	state, err := initializeState(request, maximum)
+	if err != nil {
+		panic(err)
+	}
+	return state
+}
+
 func newNoOpExecutor(ctx context.Context, maxExecutionSteps int, request *Request) (*ExecutionContext, *State) {
 	return newExecutorForTest(ctx, maxExecutionSteps, request, noOpDispatch)
 }

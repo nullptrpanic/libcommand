@@ -97,7 +97,11 @@ func main() {
 ```
 
 `SimulationRequest.Stdin` is a finite concrete stream. A nil or empty slice
-means immediate EOF. The script name exposed as `$0` is `command.sh`.
+means immediate EOF. `SimulationRequest.Files` can preload regular files into
+the isolated virtual filesystem; relative file paths resolve against
+`WorkingDir`, and their parent directories are created automatically. An empty
+`WorkingDir` keeps the existing `/` default, while a relative value is resolved
+from `/`. The script name exposed as `$0` is `command.sh`.
 
 ## Architecture
 
@@ -526,8 +530,9 @@ host implementation.
   Bash parser.
 - Command stdout and stderr are aggregate streams. Byte-level interleaving and
   independent file-descriptor offsets cannot be reconstructed.
-- The virtual filesystem starts empty at `/` and never reads the host
-  filesystem.
+- The virtual filesystem never reads the host filesystem. It starts with the
+  regular files explicitly provided through `SimulationRequest.Files`, or
+  empty at `/` when no files are provided.
 - Host-dependent identity, process, and randomness values are unresolved or
   rejected when a concrete value is required.
 - Unknown strings, field counts, and loop lengths are not exhaustively

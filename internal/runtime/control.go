@@ -125,7 +125,10 @@ func (e *ExecutionContext) Execute(file *syntax.File, request *Request) (err err
 		return err
 	}
 	e.trace.discover(file, request.Source, "command.sh", 0)
-	current := newState(request, e.config.MaxMemoryBytes)
+	current, err := initializeState(request, e.config.MaxMemoryBytes)
+	if err != nil {
+		return err
+	}
 	candidates, err := buildCandidateIndex(e.ctx, file, commandCandidateLookup(e.config.LookupCommand))
 	if err != nil {
 		return err

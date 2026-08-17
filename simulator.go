@@ -38,6 +38,10 @@ func (s *Simulator) simulate(ctx context.Context, request *SimulationRequest, tr
 	if err := checkUntrustedRequestMaterialization(request, limits.MaxMemoryBytes); err != nil {
 		return err
 	}
+	workingDir, files, err := normalizeInitialFiles(request)
+	if err != nil {
+		return err
+	}
 
 	file, err := shellruntime.Parse(ctx, request.Source, "command.sh")
 	if err != nil {
@@ -51,10 +55,12 @@ func (s *Simulator) simulate(ctx context.Context, request *SimulationRequest, tr
 		TraceOptions:      traceOptions,
 	})
 	return execution.Execute(file, &shellruntime.Request{
-		Source: request.Source,
-		Env:    request.Env,
-		Args:   request.Args,
-		Stdin:  request.Stdin,
+		Source:     request.Source,
+		Env:        request.Env,
+		Args:       request.Args,
+		Stdin:      request.Stdin,
+		Files:      files,
+		WorkingDir: workingDir,
 	})
 }
 

@@ -10,7 +10,9 @@ type Request struct {
 	Env    map[string]string
 	Args   []string
 	// Stdin initializes the concrete input stream; nil represents EOF.
-	Stdin []byte
+	Stdin      []byte
+	Files      map[string][]byte
+	WorkingDir string
 }
 
 // ArgumentKind describes whether one expanded command argument is concrete.

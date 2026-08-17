@@ -1,6 +1,12 @@
 package libcommand
 
-import "github.com/nullptrpanic/libcommand/internal/materialize"
+import (
+	"fmt"
+	"path"
+	"sort"
+
+	"github.com/nullptrpanic/libcommand/internal/materialize"
+)
 
 const (
 	defaultMaxExecutionSteps = 10_000
@@ -35,6 +41,9 @@ func checkUntrustedRequestMaterialization(request *SimulationRequest, maximum in
 	if ok {
 		total, ok = materialize.Add(total, len(request.Stdin), maximum)
 	}
+	if ok {
+		total, ok = materialize.Add(total, len(request.WorkingDir), maximum)
+	}
 	for _, argument := range request.Args {
 		if !ok {
 			break
@@ -56,8 +65,58 @@ func checkUntrustedRequestMaterialization(request *SimulationRequest, maximum in
 			total, ok = materialize.Add(total, len(value), maximum)
 		}
 	}
+	for name, contents := range request.Files {
+		if !ok {
+			break
+		}
+		total, ok = materialize.Add(total, materialize.EntryBytes, maximum)
+		if ok {
+			total, ok = materialize.Add(total, len(name), maximum)
+		}
+		if ok {
+			total, ok = materialize.Add(total, len(contents), maximum)
+		}
+	}
 	if !ok {
 		return materialize.LimitError(maximum)
 	}
 	return nil
+}
+
+func normalizeInitialFiles(request *SimulationRequest) (string, map[string][]byte, error) {
+	workingDir := request.WorkingDir
+	if workingDir == "" {
+		workingDir = "/"
+	} else if !path.IsAbs(workingDir) {
+		workingDir = path.Join("/", workingDir)
+	} else {
+		workingDir = path.Clean(workingDir)
+	}
+
+	names := make([]string, 0, len(request.Files))
+	for name := range request.Files {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	files := make(map[string][]byte, len(names))
+	originalNames := make(map[string]string, len(names))
+	for _, name := range names {
+		if name == "" {
+			return "", nil, fmt.Errorf("initial file path is empty")
+		}
+		resolved := name
+		if !path.IsAbs(resolved) {
+			resolved = path.Join(workingDir, resolved)
+		} else {
+			resolved = path.Clean(resolved)
+		}
+		if previous, exists := originalNames[resolved]; exists {
+			return "", nil, fmt.Errorf("initial files %q and %q resolve to the same virtual path %q", previous, name, resolved)
+		}
+		files[resolved] = request.Files[name]
+		originalNames[resolved] = name
+	}
+
+	return workingDir, files, nil
 }

@@ -14,7 +14,7 @@ func TestSimulationRequestPublicFields(t *testing.T) {
 	for index := range fields {
 		fields[index] = typeOfRequest.Field(index).Name
 	}
-	want := []string{"Source", "Env", "Args", "Stdin"}
+	want := []string{"Source", "Env", "Args", "Stdin", "Files", "WorkingDir"}
 	if !reflect.DeepEqual(fields, want) {
 		t.Fatalf("SimulationRequest fields = %#v, want %#v", fields, want)
 	}

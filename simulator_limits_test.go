@@ -73,6 +73,18 @@ func TestSimulatorLimitsRequestMaterialization(t *testing.T) {
 	}
 }
 
+func TestSimulatorLimitsInitialFilesBeforeParsing(t *testing.T) {
+	const maximum = 64
+	simulator := NewBuilder().Limits(&Limits{MaxMemoryBytes: maximum}).Build()
+	err := simulator.Simulate(context.Background(), &SimulationRequest{
+		Source: "if",
+		Files:  map[string][]byte{"data": []byte(strings.Repeat("x", maximum))},
+	})
+	if err == nil || !strings.Contains(err.Error(), "maximum materialized byte count 64 reached") {
+		t.Fatalf("Simulate() error = %v", err)
+	}
+}
+
 func TestSimulatorUsesConfiguredMemoryLimitDuringEvaluation(t *testing.T) {
 	simulator := NewBuilder().
 		Limits(&Limits{MaxMemoryBytes: 128}).

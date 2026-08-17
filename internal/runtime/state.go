@@ -1,7 +1,9 @@
 package runtime
 
 import (
+	"fmt"
 	"maps"
+	"sort"
 	"strconv"
 
 	"github.com/nullptrpanic/libcommand/internal/materialize"
@@ -99,12 +101,28 @@ type substitutionFrame struct {
 	lastExitStatus    *uncertain[int]
 }
 
-func newState(request *Request, maximum int) *State {
-	const dir = "/"
+func initializeState(request *Request, maximum int) (*State, error) {
+	dir := request.WorkingDir
+	if dir == "" {
+		dir = "/"
+	}
 	vars := newVariables(request.Env)
 	vars.put("PWD", expand.Variable{Set: true, Exported: true, Kind: expand.String, Str: dir})
 	vars.put("0", expand.Variable{Set: true, Kind: expand.String, Str: "command.sh"})
 	fs := newMemoryFS(maximum)
+	if err := fs.ensureDir(dir); err != nil {
+		return nil, fmt.Errorf("initialize working directory %q: %w", dir, err)
+	}
+	fileNames := make([]string, 0, len(request.Files))
+	for name := range request.Files {
+		fileNames = append(fileNames, name)
+	}
+	sort.Strings(fileNames)
+	for _, name := range fileNames {
+		if err := fs.writeValueMode(name, request.Files[name], false, false, true); err != nil {
+			return nil, fmt.Errorf("initialize file %q: %w", name, err)
+		}
+	}
 	s := &State{
 		vars:             vars,
 		functions:        make(map[string]*syntax.FuncDecl),
@@ -120,7 +138,7 @@ func newState(request *Request, maximum int) *State {
 	}
 	s.replacePositionalArguments(request.Args)
 	s.initialBytes, _ = stateMaterialization(s)
-	return s
+	return s, nil
 }
 
 // newShellChild constructs the process state for a simulated bash or sh
