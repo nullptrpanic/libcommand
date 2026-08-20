@@ -43,7 +43,7 @@ func executeEcho(ctx context.Context, invocation *runtime.Invocation, maximum in
 	}
 	if len(args) > 1 {
 		var ok bool
-		total, ok = materialize.Add(total, len(args)-1, maximum)
+		_, ok = materialize.Add(total, len(args)-1, maximum)
 		if !ok {
 			return nil, materialize.LimitError(maximum)
 		}

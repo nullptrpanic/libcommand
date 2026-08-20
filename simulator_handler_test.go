@@ -85,8 +85,7 @@ func TestUserCommandRunsChildShell(t *testing.T) {
 }
 
 func TestNestedShellParentsCountTowardMemoryLimit(t *testing.T) {
-	var recurse Command
-	recurse = func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	var recurse Command = func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		depth, err := strconv.Atoi(argumentString(t, invocation.Args[0]))
 		if err != nil {
 			return nil, err

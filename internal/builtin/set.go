@@ -3,7 +3,6 @@ package builtin
 import (
 	"context"
 	"fmt"
-	"sort"
 	"strings"
 
 	"github.com/nullptrpanic/libcommand/internal/materialize"
@@ -135,47 +134,6 @@ func queryNamedShellOptions(shell *runtime.CommandContext, table bool) *runtime.
 		fmt.Fprintf(&output, "set %so %s\n", operator, name)
 	}
 	return &runtime.CommandResult{Stdout: []byte(output.String())}
-}
-
-func shellOptionFlags(shell *runtime.CommandContext) string {
-	var flags strings.Builder
-	for _, option := range []struct {
-		flag         byte
-		name         string
-		defaultValue bool
-	}{
-		{flag: 'a', name: "allexport"},
-		{flag: 'e', name: "errexit"},
-		{flag: 'f', name: "noglob"},
-		{flag: 'h', defaultValue: true},
-		{flag: 'u', name: "nounset"},
-		{flag: 'v', name: "verbose"},
-		{flag: 'x', name: "xtrace"},
-		{flag: 'B', defaultValue: true},
-		{flag: 'E', name: "errtrace"},
-		{flag: 'c', name: "command-string"},
-	} {
-		enabled := option.defaultValue
-		if option.name != "" {
-			enabled, _ = shell.Option(option.name)
-		}
-		if enabled {
-			flags.WriteByte(option.flag)
-		}
-	}
-	return flags.String()
-}
-
-func enabledShellOptions(shell *runtime.CommandContext) string {
-	names := []string{"braceexpand", "hashall", "interactive-comments"}
-	for _, name := range namedShellOptions {
-		enabled, _ := shell.Option(name)
-		if enabled {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return strings.Join(names, ":")
 }
 
 func quoteShellWord(value string) string {

@@ -58,13 +58,7 @@ func (e *ExecutionContext) evaluateExpandedCommand(s *State, source syntax.Node,
 
 	saved, assignmentErr := e.applyTemporaryAssignments(s, assignments)
 	if assignmentErr != nil {
-		if e.releaseExecutionStepOnSubstitution(assignmentErr) {
-			return nil, assignmentErr
-		}
-		if result, resultErr, incomplete := e.incompleteFromEvaluationError(s, assignmentErr, sourceLocation(source)); incomplete {
-			return []*pathResult{{state: s, status: result.status}}, resultErr
-		}
-		return e.unresolvedPath(s, assignmentErr.Error(), sourceLocation(source)), nil
+		return e.pathsFromEvaluationError(s, assignmentErr, sourceLocation(source))
 	}
 	input, _ := s.stdin.Data()
 	invocation, status, invocationErr := e.commandInvocation(
@@ -94,13 +88,7 @@ func (e *ExecutionContext) evaluateAssignmentCall(s *State, call *syntax.CallExp
 		return []*pathResult{{state: s, status: status}}, nil
 	}
 	if err := e.applyAssignments(s, call.Assigns, expand.Unknown, false); err != nil {
-		if e.releaseExecutionStepOnSubstitution(err) {
-			return nil, err
-		}
-		if result, resultErr, incomplete := e.incompleteFromEvaluationError(s, err, sourceLocation(call)); incomplete {
-			return []*pathResult{{state: s, status: result.status}}, resultErr
-		}
-		return e.unresolvedPath(s, err.Error(), sourceLocation(call)), nil
+		return e.pathsFromEvaluationError(s, err, sourceLocation(call))
 	}
 	if exitCode, exitUnknown, exists := s.lastSubstitutionExitStatus(); exists {
 		s.setExitStatus(exitCode, exitUnknown)

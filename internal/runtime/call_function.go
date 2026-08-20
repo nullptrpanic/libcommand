@@ -85,14 +85,7 @@ func (e *ExecutionContext) evaluateFunctionCallAfterStep(s *State, source syntax
 	if err := e.applyAssignments(s, assignments, expand.Unknown, true); err != nil {
 		s.funcDepth--
 		s.popLocalScope()
-		if e.releaseExecutionStepOnSubstitution(err) {
-			return nil, err
-		}
-		if result, resultErr, incomplete := e.incompleteFromEvaluationError(s, err, sourceLocation(source)); incomplete {
-			return []*pathResult{{state: s, status: result.status}}, resultErr
-		}
-		result := e.unresolved(s, err.Error(), sourceLocation(source))
-		return []*pathResult{{state: s, status: result.status}}, nil
+		return e.pathsFromEvaluationError(s, err, sourceLocation(source))
 	}
 
 	errCommand, inheritedErrTrap := s.traps["ERR"]

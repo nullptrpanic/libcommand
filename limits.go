@@ -37,45 +37,34 @@ func limitsWithDefaults(limits *Limits) *Limits {
 // checkUntrustedRequestMaterialization bounds request data before the
 // evaluator copies or expands it.
 func checkUntrustedRequestMaterialization(request *SimulationRequest, maximum int) error {
-	total, ok := materialize.Add(0, len(request.Source), maximum)
-	if ok {
-		total, ok = materialize.Add(total, len(request.Stdin), maximum)
+	total := 0
+	ok := true
+	add := func(sizes ...int) {
+		for _, size := range sizes {
+			if !ok {
+				return
+			}
+			total, ok = materialize.Add(total, size, maximum)
+		}
 	}
-	if ok {
-		total, ok = materialize.Add(total, len(request.WorkingDir), maximum)
-	}
+	add(len(request.Source), len(request.Stdin), len(request.WorkingDir))
 	for _, argument := range request.Args {
 		if !ok {
 			break
 		}
-		total, ok = materialize.Add(total, materialize.EntryBytes, maximum)
-		if ok {
-			total, ok = materialize.Add(total, len(argument), maximum)
-		}
+		add(materialize.EntryBytes, len(argument))
 	}
 	for name, value := range request.Env {
 		if !ok {
 			break
 		}
-		total, ok = materialize.Add(total, materialize.EntryBytes, maximum)
-		if ok {
-			total, ok = materialize.Add(total, len(name), maximum)
-		}
-		if ok {
-			total, ok = materialize.Add(total, len(value), maximum)
-		}
+		add(materialize.EntryBytes, len(name), len(value))
 	}
 	for name, contents := range request.Files {
 		if !ok {
 			break
 		}
-		total, ok = materialize.Add(total, materialize.EntryBytes, maximum)
-		if ok {
-			total, ok = materialize.Add(total, len(name), maximum)
-		}
-		if ok {
-			total, ok = materialize.Add(total, len(contents), maximum)
-		}
+		add(materialize.EntryBytes, len(name), len(contents))
 	}
 	if !ok {
 		return materialize.LimitError(maximum)

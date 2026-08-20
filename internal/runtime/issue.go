@@ -43,6 +43,16 @@ func (e *ExecutionContext) unresolvedPath(s *State, message string, source *loca
 	return []*pathResult{{state: s, status: result.status}}
 }
 
+func (e *ExecutionContext) pathsFromEvaluationError(s *State, err error, source *location) ([]*pathResult, error) {
+	if e.releaseExecutionStepOnSubstitution(err) {
+		return nil, err
+	}
+	if result, resultErr, incomplete := e.incompleteFromEvaluationError(s, err, source); incomplete {
+		return []*pathResult{{state: s, status: result.status}}, resultErr
+	}
+	return e.unresolvedPath(s, err.Error(), source), nil
+}
+
 func (e *ExecutionContext) unresolved(s *State, message string, source *location) *outcome {
 	e.setIssue(s, errors.New(message), source)
 	return &outcome{status: StatusUnresolved}

@@ -246,11 +246,6 @@ func (fs *memoryFS) missingDirectories(name string) ([]string, int, error) {
 	return missing, materializedBytes, nil
 }
 
-func (fs *memoryFS) isDir(name string) bool {
-	_, exists := fs.dirs[path.Clean(name)]
-	return exists
-}
-
 func (fs *memoryFS) readDir(ctx context.Context, name string) ([]iofs.DirEntry, error) {
 	name = path.Clean(name)
 	if _, exists := fs.dirs[name]; !exists {

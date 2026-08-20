@@ -155,27 +155,14 @@ func (e *ExecutionContext) expandFields(s *State, words []*syntax.Word, allowHos
 			restore = maskInactiveParameterWords(s, word)
 			wordUnknown = unmaskedWordCertainty(s, word, false).hostUnknown()
 		}
-		overrides, restoreParameters, prepareErr := e.prepareParameterExpansions(s, word)
-		if prepareErr != nil {
-			restore()
-			return nil, prepareErr
-		}
-		restoreArithmetic, arithmeticErr := e.prepareArithmeticExpansions(s, word)
-		if arithmeticErr != nil {
-			restoreParameters()
-			restore()
-			return nil, arithmeticErr
-		}
-		if err := e.checkWordMaterialization(s, word, materializedBytes); err != nil {
-			restoreArithmetic()
-			restoreParameters()
-			restore()
-			return nil, err
-		}
-		expanded, nextMaterializedBytes, expandErr := e.expandFieldsWithinLimit(e.expansionConfigWithDirectoryCache(s, overrides, directoryCache), word, materializedBytes)
-		restoreArithmetic()
-		restoreParameters()
-		restore()
+		expanded, nextMaterializedBytes, expandErr := e.expandPreparedWordFields(
+			s,
+			word,
+			materializedBytes,
+			directoryCache,
+			restore,
+			noopRestore,
+		)
 		if expandErr != nil {
 			return nil, expandErr
 		}
@@ -196,6 +183,36 @@ func (e *ExecutionContext) expandFields(s *State, words []*syntax.Word, allowHos
 		}
 	}
 	return expansion, nil
+}
+
+func (e *ExecutionContext) expandPreparedWordFields(
+	s *State,
+	word *syntax.Word,
+	materializedBytes int,
+	directoryCache map[string][]iofs.DirEntry,
+	restoreWord func(),
+	beforeArithmetic func(),
+) ([]string, int, error) {
+	defer restoreWord()
+	overrides, restoreParameters, err := e.prepareParameterExpansions(s, word)
+	if err != nil {
+		return nil, materializedBytes, err
+	}
+	defer restoreParameters()
+	beforeArithmetic()
+	restoreArithmetic, err := e.prepareArithmeticExpansions(s, word)
+	if err != nil {
+		return nil, materializedBytes, err
+	}
+	defer restoreArithmetic()
+	if err := e.checkWordMaterialization(s, word, materializedBytes); err != nil {
+		return nil, materializedBytes, err
+	}
+	return e.expandFieldsWithinLimit(
+		e.expansionConfigWithDirectoryCache(s, overrides, directoryCache),
+		word,
+		materializedBytes,
+	)
 }
 
 func (e *ExecutionContext) applyAssignments(s *State, assignments []*syntax.Assign, declaredKind expand.ValueKind, exported bool) (err error) {
