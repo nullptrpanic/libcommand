@@ -13,7 +13,13 @@ func (e *ExecutionContext) invokeCommand(state *State, source *location, command
 	case *syntax.DeclClause, *syntax.LetClause:
 		contextSyntax = commandSyntax
 	}
-	commandContext := &CommandContext{execution: e, state: state, source: source, syntax: contextSyntax}
+	commandContext := &CommandContext{
+		execution: e,
+		state:     state,
+		source:    source,
+		syntax:    contextSyntax,
+		redirects: cloneRedirects(e.redirects),
+	}
 	e.trace.commandStarted(e, state, commandSyntax, invocation)
 	var result *CommandResult
 	func() {

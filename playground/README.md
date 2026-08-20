@@ -121,6 +121,17 @@ decoded `invocation.stdin`, and unresolved metadata. It must return an object
 containing optional `stdout`, `stderr`, and `exitCode` fields. Promises are not
 supported. Commands that are not listed use the library's unresolved fallback.
 
+The Playground installs its command-analysis registry as one Builder
+middleware. Consequently matching builtins, configured handlers, and fallback
+calls all pass through analysis without separate wrapping. Analysis results are
+discarded; a classified risk error is recorded without stopping the simulation,
+and the selected command's result or error remains authoritative. Detected AST
+nodes and the matching Runtime occurrences are outlined in red, and selecting
+one shows the full detection error in the inspector. The default registry
+covers destructive root removal, system power commands, executable netcat
+variants, `socat` execution addresses, and expanded `/dev/tcp` or `/dev/udp`
+redirections for those commands.
+
 JavaScript handlers run only inside the same disposable browser Worker as the
 WebAssembly simulator. They cannot execute a server or host command, and the
 browser timeout terminates infinite loops by replacing the Worker. This is not

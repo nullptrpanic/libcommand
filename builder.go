@@ -7,8 +7,9 @@ import (
 
 // Builder registers commands before constructing a Simulator.
 type Builder struct {
-	commands map[string]Command
-	limits   *Limits
+	commands    map[string]Command
+	middlewares []CommandMiddleware
+	limits      *Limits
 }
 
 // NewBuilder returns an empty Builder.
@@ -40,6 +41,15 @@ func (b *Builder) Command(name string, command Command) *Builder {
 	return b
 }
 
+// Middleware appends command middleware in registration order. Middleware is
+// applied to builtins, caller-provided commands, and the fallback after command
+// definitions are merged. Shell functions and evaluator-owned control
+// transfers are not commands and do not pass through this chain.
+func (b *Builder) Middleware(middlewares ...CommandMiddleware) *Builder {
+	b.middlewares = append(b.middlewares, middlewares...)
+	return b
+}
+
 // Build returns an immutable Simulator.
 func (b *Builder) Build() *Simulator {
 	limits := limitsWithDefaults(b.limits)
@@ -56,5 +66,15 @@ func (b *Builder) Build() *Simulator {
 		definition.Fallback = name == "*"
 		commands[name] = definition
 	}
+	for _, definition := range commands {
+		definition.Command = applyCommandMiddleware(definition.Command, b.middlewares)
+	}
 	return &Simulator{commands: commands, limits: limits}
+}
+
+func applyCommandMiddleware(command Command, middlewares []CommandMiddleware) Command {
+	for index := len(middlewares) - 1; index >= 0; index-- {
+		command = middlewares[index](command)
+	}
+	return command
 }

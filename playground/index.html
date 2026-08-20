@@ -68,7 +68,7 @@
             <div class="commands-toolbar">
               <div>
                 <strong>Registered commands</strong>
-                <p>Return a fixed result, error, or synchronous JavaScript result. Exact names override builtins; <code>*</code> is the fallback.</p>
+                <p>Return a fixed result, error, or synchronous JavaScript result. Exact names override builtins; <code>*</code> is the fallback. Risk checks run first without replacing the configured result.</p>
               </div>
               <button id="add-command" class="quiet-button" type="button">+ Add command</button>
             </div>
@@ -116,6 +116,7 @@
             <span><i class="legend-current"></i>current</span>
             <span><i class="legend-executed"></i>executed</span>
             <span><i class="legend-unresolved"></i>unresolved</span>
+            <span><i class="legend-risk"></i>risk</span>
             <span><i class="legend-skipped"></i>not executed</span>
           </div>
         </div>

@@ -140,6 +140,7 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 			} else {
 				plan.stdin = newCertain(contents)
 			}
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename})
 			plan.stdinReplaced = true
 			plan.stdinFile = filename
 		case syntax.WordHdoc:
@@ -191,6 +192,7 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 			}
 			target := outputTarget{id: nextTargetID, file: filename, append: redirection.Op == syntax.AppOut}
 			nextTargetID++
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename})
 			if fd == 1 {
 				plan.stdout = target
 			} else {
@@ -216,6 +218,7 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 			default:
 				return nil, fmt.Errorf("unsupported output descriptor duplication %d>&%s", fd, target)
 			}
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: target})
 			if fd == 1 {
 				plan.stdout = output
 			} else {
@@ -232,6 +235,7 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 			if target != "0" && target != "-" {
 				return nil, fmt.Errorf("unsupported input descriptor duplication %d<&%s", fd, target)
 			}
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: target})
 			if target == "-" {
 				plan.stdin = newCertain[[]byte](nil)
 				plan.stdinReplaced = true
@@ -255,6 +259,7 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 			}
 			output := outputTarget{id: nextTargetID, file: filename, append: redirection.Op == syntax.AppAll}
 			nextTargetID++
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename})
 			plan.stdout = output
 			plan.stderr = output
 		default:

@@ -13,6 +13,7 @@ type CommandContext struct {
 	state     *State
 	source    *location
 	syntax    syntax.Command
+	redirects []*Redirect
 }
 
 // State returns the current execution-path state.
@@ -24,6 +25,13 @@ func (c *CommandContext) State() *State {
 // declaration or let clause. Ordinary calls and nested dispatches return nil.
 func (c *CommandContext) CommandSyntax() syntax.Command {
 	return c.syntax
+}
+
+// Redirects returns the expanded file and descriptor redirections active for
+// this command. File targets are absolute paths in the virtual filesystem.
+// The returned values must be treated as read-only and not retained.
+func (c *CommandContext) Redirects() []*Redirect {
+	return c.redirects
 }
 
 // ResultUnknown marks independently unknown output and exit dimensions.
@@ -131,6 +139,15 @@ func cloneArguments(arguments []*Argument) []*Argument {
 	cloned := make([]*Argument, len(arguments))
 	for index, argument := range arguments {
 		copied := *argument
+		cloned[index] = &copied
+	}
+	return cloned
+}
+
+func cloneRedirects(redirects []*Redirect) []*Redirect {
+	cloned := make([]*Redirect, len(redirects))
+	for index, redirect := range redirects {
+		copied := *redirect
 		cloned[index] = &copied
 	}
 	return cloned

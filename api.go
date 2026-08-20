@@ -56,6 +56,10 @@ type Argument = shellruntime.Argument
 // resolved by the simulator.
 type InvocationUnresolved = shellruntime.InvocationUnresolved
 
+// Redirect is one expanded file or descriptor redirection active for a
+// registered command.
+type Redirect = shellruntime.Redirect
+
 // CommandAction controls evaluation after a command returns.
 type CommandAction = shellruntime.CommandAction
 
@@ -84,6 +88,12 @@ type CommandContext = shellruntime.CommandContext
 // error use unresolved-command behavior. A non-nil error aborts simulation.
 // Panics are converted to simulation errors.
 type Command = shellruntime.Command
+
+// CommandMiddleware decorates one command. Middleware registered first wraps
+// middleware registered later and therefore observes the call first and the
+// result last. A middleware may short-circuit without calling next, but must
+// not call next more than once or retain call-scoped arguments after returning.
+type CommandMiddleware func(Command) Command
 
 // ArithmeticResult is one arithmetic evaluation requested by a command.
 type ArithmeticResult = shellruntime.ArithmeticResult
@@ -159,9 +169,13 @@ type TraceEvent = shellruntime.TraceEvent
 type TracePathStatus = shellruntime.Status
 
 const (
-	TraceStatusCompleted  = shellruntime.StatusCompleted
+	// TraceStatusCompleted indicates a path completed normally.
+	TraceStatusCompleted = shellruntime.StatusCompleted
+	// TraceStatusTerminated indicates a path ended through Shell control flow.
 	TraceStatusTerminated = shellruntime.StatusTerminated
+	// TraceStatusIncomplete indicates evaluation stopped with an issue.
 	TraceStatusIncomplete = shellruntime.StatusIncomplete
+	// TraceStatusUnresolved indicates a retained path with unresolved semantics.
 	TraceStatusUnresolved = shellruntime.StatusUnresolved
 )
 

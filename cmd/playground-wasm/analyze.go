@@ -58,6 +58,7 @@ type playgroundResponse struct {
 	ASTNodeCount     int                      `json:"astNodeCount"`
 	Events           []*libcommand.TraceEvent `json:"events"`
 	Invocations      []*playgroundInvocation  `json:"invocations"`
+	Detections       []*playgroundDetection   `json:"detections"`
 	Outputs          []*playgroundPathOutput  `json:"outputs"`
 	DurationMicros   int64                    `json:"durationMicros"`
 	PeakLogicalBytes int                      `json:"peakLogicalBytes"`
@@ -145,11 +146,12 @@ func analyze(request *playgroundRequest, maximumEvents int) *playgroundResponse 
 func analyzeWithTrace(request *playgroundRequest, maximumEvents int, stream func(*libcommand.TraceEvent)) *playgroundResponse {
 	started := time.Now()
 	response := &playgroundResponse{}
+	analyzer := newPlaygroundAnalyzer()
 	wildcardConfigured := false
 	builder := libcommand.NewBuilder().Limits(&libcommand.Limits{
 		MaxExecutionSteps: request.MaxExecutionSteps,
 		MaxMemoryBytes:    request.MaxMemoryBytes,
-	})
+	}).Middleware(analyzer.middleware)
 	for _, command := range request.Commands {
 		current := command
 		wildcardConfigured = wildcardConfigured || current.Name == "*"
@@ -179,6 +181,7 @@ func analyzeWithTrace(request *playgroundRequest, maximumEvents int, stream func
 	traceTruncated := false
 	collectingASTNodes := true
 	observer := func(event *libcommand.TraceEvent) bool {
+		analyzer.observe(event)
 		recordPlaygroundOutput(response, event, &outputBytes)
 		if event.SnapshotTruncated {
 			response.Truncated = true
@@ -238,6 +241,7 @@ func analyzeWithTrace(request *playgroundRequest, maximumEvents int, stream func
 	if err != nil {
 		response.Error = err.Error()
 	}
+	response.Detections = analyzer.detections
 	return response
 }
 

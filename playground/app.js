@@ -792,7 +792,8 @@ function renderGraph(model, preserveSelection = false) {
 
   for (const node of renderedNodes) {
     const position = layout.positions.get(node.id);
-    const button = createElement("button", `flow-node ${node.definition.kind} ${node.state}`);
+    const riskClass = node.detections?.length ? "risk-detected" : "";
+    const button = createElement("button", `flow-node ${node.definition.kind} ${node.state} ${riskClass}`);
     button.type = "button";
     button.style.left = `${position.x}px`;
     button.style.top = `${position.y}px`;
@@ -849,6 +850,20 @@ function renderInspector(node) {
   row.append(createElement("strong", "", node.definition.snippet), createElement("span", `state-badge ${nodeState(node)}`, nodeStateLabel(node)));
   selected.append(row, createElement("div", "inspector-source", `${sourceLabel(node.definition.source)} · ${node.pathID ? `path ${node.pathID}` : "static syntax"}`));
   overview.append(selected);
+
+  if (node.detections?.length) {
+    const section = inspectorSection(`Risk detections (${node.detections.length})`);
+    section.classList.add("risk-detections");
+    for (const detection of node.detections) {
+      const item = createElement("article", "risk-detection");
+      item.append(
+        createElement("strong", "", `${detection.command || "command"} · path ${detection.pathId || "?"} · event ${detection.sequence || "?"}`),
+        createElement("pre", "", detection.error || "Command risk detected"),
+      );
+      section.append(item);
+    }
+    overview.append(section);
+  }
 
   const execution = inspectorSection("Execution");
   execution.append(memoryRow("Occurrence", executionOccurrenceLabel(node)));
@@ -1310,6 +1325,7 @@ function createElement(tag, className = "", text = "") {
 }
 
 function nodeState(node) {
+  if (node.detections?.length) return "risk-detected";
   if (!node.executed) return "not-executed";
   if (node.forked || node.commandResult?.unresolved || node.status === 3 || node.pathStatus === 3) return "unresolved";
   return "executed";

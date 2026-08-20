@@ -269,6 +269,7 @@ flowchart TD
     User["Caller registration"]
     Builtin["Default builtin or wrapper"]
     Fallback["Configured * fallback"]
+	Middleware["Ordered command middleware"]
 
     Expanded --> Function
     Function -->|"yes"| FunctionBody
@@ -278,6 +279,9 @@ flowchart TD
     Exact -->|"caller override"| User
     Exact -->|"default"| Builtin
     Exact -->|"missing"| Fallback
+	User --> Middleware
+	Builtin --> Middleware
+	Fallback --> Middleware
 ```
 
 `command` and `builtin` wrappers deliberately bypass Shell functions and
@@ -285,6 +289,32 @@ dispatch through the same exact definition table. A caller registration can
 replace any default call command, including `echo`, `cd`, `eval`, `source`,
 `exec`, `command`, and `builtin`. The four evaluator-owned control transfers
 cannot be replaced by a Builder registration.
+
+`Middleware` appends decorators to one ordered list. `Build` applies that list
+after merging defaults, caller overrides, and the fallback, so every selected
+command definition uses the same chain. The first registered middleware is the
+outermost wrapper: `A before -> B before -> command -> B after -> A after`.
+Shell functions and evaluator-owned control transfers are not registry commands
+and therefore do not enter this chain.
+
+```go
+builder.Middleware(func(next libcommand.Command) libcommand.Command {
+	return func(
+		ctx context.Context,
+		shell *libcommand.CommandContext,
+		invocation *libcommand.Invocation,
+	) (*libcommand.CommandResult, error) {
+		fmt.Printf("command: %s\n", invocation.Name)
+		return next(ctx, shell, invocation)
+	}
+})
+```
+
+Middleware is also used for commands reached through `eval`, `source`, Shell
+wrappers, and command substitutions because those calls return through the
+same registry. A middleware may inspect or reject a call, alter its result, or
+continue to `next` at most once; it has the same concurrency and lifetime
+obligations as a `Command`.
 
 The default registry includes common Shell builtins and deterministic
 in-process helpers:
@@ -367,6 +397,8 @@ runtime path construction:
 
 - `Directory` and `ChangeDirectory`
 - `Variable`, `SetVariable`, and `UnsetVariable`
+- `Redirects`, containing the concrete expanded targets and operators active
+  for the call; virtual file targets are absolute paths
 - virtual filesystem, input, option, lookup, arithmetic, and nested-execution
   operations exposed by `CommandContext`
 
@@ -389,6 +421,34 @@ Result behavior is explicit:
 Handler panics are converted to simulation errors. Returned stdout and stderr
 are budget-checked after the callback returns, but external side effects that
 already occurred cannot be rolled back.
+
+### Built-in risk analysis
+
+The optional `analysis` package exposes one independently registerable
+`Command` per executable. Applications opt into only the checks they need:
+
+```go
+simulator := libcommand.NewBuilder().
+	Command("rm", analysis.RM).
+	Command("poweroff", analysis.Poweroff).
+	Command("nc", analysis.NC).
+	Build()
+
+err := simulator.Simulate(ctx, request)
+if errors.Is(err, analysis.ErrRiskDetected) {
+	// Reject the request.
+}
+```
+
+Available handlers cover `rm`, common power-control commands, and
+`nc`/`ncat`/`netcat`/`socat`. Each selected handler also inspects concrete
+expanded `/dev/tcp` and `/dev/udp` redirections. A detection is returned as
+`*analysis.DetectionError` and is propagated by `Simulate`; inconclusive or
+unresolved input is treated as safe and retains unresolved-command behavior.
+Registration uses exact expanded command names, so `/bin/rm` must be
+registered separately if required. Nested decoded source still returns
+through normal dispatch: registering only `analysis.RM` detects `rm -rf /`
+decoded by `base64 -d | sh`.
 
 ## Resource model
 

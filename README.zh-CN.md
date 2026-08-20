@@ -252,6 +252,7 @@ flowchart TD
     User["调用方注册命令"]
     Builtin["默认 Builtin 或 Wrapper"]
     Fallback["配置的 * fallback"]
+	Middleware["有序 Command Middleware"]
 
     Expanded --> Function
     Function -->|"是"| FunctionBody
@@ -261,12 +262,38 @@ flowchart TD
     Exact -->|"调用方覆盖"| User
     Exact -->|"默认实现"| Builtin
     Exact -->|"未命中"| Fallback
+	User --> Middleware
+	Builtin --> Middleware
+	Fallback --> Middleware
 ```
 
 `command` 和 `builtin` Wrapper 会绕过 Shell 函数，并通过同一份精确定义表进行
 分发。调用方可以覆盖任意默认 call 命令，包括 `echo`、`cd`、`eval`、
 `source`、`exec`、`command` 和 `builtin`。四个由执行器管理的控制转移不能
 被 Builder 注册项替换。
+
+`Middleware` 会按注册顺序追加装饰器。`Build` 在合并默认实现、调用方覆盖和
+fallback 后再应用这条链，因此所有最终选中的命令定义都经过同一机制。最先注册的
+Middleware 位于最外层，执行顺序为
+`A before -> B before -> command -> B after -> A after`。Shell 函数和由执行器
+管理的控制转移不属于命令注册表，因此不会进入这条链。
+
+```go
+builder.Middleware(func(next libcommand.Command) libcommand.Command {
+	return func(
+		ctx context.Context,
+		shell *libcommand.CommandContext,
+		invocation *libcommand.Invocation,
+	) (*libcommand.CommandResult, error) {
+		fmt.Printf("command: %s\n", invocation.Name)
+		return next(ctx, shell, invocation)
+	}
+})
+```
+
+由 `eval`、`source`、Shell Wrapper 和命令替换产生的调用仍会回到同一注册表，
+因此也会经过 Middleware。Middleware 可以检查或拒绝调用、调整结果，或者继续
+调用 `next`（最多一次）；其并发与生命周期约束和普通 `Command` 相同。
 
 默认注册表包含常用 Shell Builtin 和确定性的进程内辅助命令：
 
@@ -346,6 +373,8 @@ builder.Command("evaluate", func(
 
 - `Directory` 和 `ChangeDirectory`；
 - `Variable`、`SetVariable` 和 `UnsetVariable`；
+- `Redirects`，包含当前调用已展开为具体值的重定向目标和操作符；虚拟文件目标
+  为绝对路径；
 - `CommandContext` 暴露的虚拟文件系统、输入、选项、查找、算术和嵌套执行操作。
 
 状态变更只作用于当前路径，采用 Copy-on-Write，并受逻辑物化预算检查。命令返回
@@ -365,6 +394,32 @@ builder.Command("evaluate", func(
 
 Handler Panic 会被转换为模拟错误。回调返回后，Runtime 会检查 stdout 和 stderr
 是否超过预算；已经发生的外部副作用无法回滚。
+
+### 内置风险分析
+
+可选的 `analysis` 包按照可执行命令提供彼此独立的 `Command`，调用方只注册需要
+启用的检测：
+
+```go
+simulator := libcommand.NewBuilder().
+	Command("rm", analysis.RM).
+	Command("poweroff", analysis.Poweroff).
+	Command("nc", analysis.NC).
+	Build()
+
+err := simulator.Simulate(ctx, request)
+if errors.Is(err, analysis.ErrRiskDetected) {
+	// 拒绝请求。
+}
+```
+
+目前提供 `rm`、常见电源控制命令以及 `nc`/`ncat`/`netcat`/`socat` Handler；每个
+被选中的 Handler 也会检查已经展开为具体值的 `/dev/tcp`、`/dev/udp` 重定向。
+命中时返回 `*analysis.DetectionError`，并由 `Simulate` 原样向上游传递；无法确定或
+包含 unresolved 数据时按安全处理，并保留 unresolved-command 行为。注册名按照
+展开后的命令名精确匹配，如需检测 `/bin/rm`，调用方应另外注册该名字。嵌套 Shell
+仍会通过正常分发递归检测：只注册 `analysis.RM`，也能检出
+`base64 -d | sh` 解出的 `rm -rf /`。
 
 ## 资源模型
 

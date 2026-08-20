@@ -102,6 +102,13 @@ Handler 可以读取 `invocation.name`、类型化的 `invocation.args`、
 元数据。它必须返回一个对象，其中可以包含 `stdout`、`stderr` 和 `exitCode`。
 不支持 Promise。未列出的命令使用 Library 自带的 unresolved fallback。
 
+Playground 会把命令检测注册表安装为一层 Builder Middleware，因此匹配的 Builtin、
+用户 Handler 和 fallback 都会进入分析，无需分别包装。检测返回值会被丢弃；分类为
+风险的错误只用于记录，不会中断模拟，最终结果或错误仍以实际选中的命令为准。命中
+的 AST 节点和对应 Runtime occurrence 会显示红色边框，选中节点即可在检查器中查看
+完整检测错误。默认注册表覆盖根目录递归删除、系统关机或重启、可执行程序的 netcat
+变体、`socat` 执行地址，以及这些命令上展开后的 `/dev/tcp` 或 `/dev/udp` 重定向。
+
 JavaScript Handler 只会在运行 WebAssembly 模拟器的同一个一次性浏览器 Worker
 中执行。它不能执行 Server 或宿主机命令；浏览器超时会通过替换 Worker 终止无限
 循环。这里并不是可运行任意恶意 JavaScript 的通用沙箱：公开部署时应使用不含

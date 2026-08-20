@@ -721,6 +721,30 @@ test("runtime flow marks an unregistered command unresolved", () => {
   assert.equal(models.runtime.nodes[0].state, "unresolved");
 });
 
+test("risk detection marks the AST node and only the matching runtime occurrence", () => {
+  const detection = {
+    sequence: 3,
+    nodeId: 1,
+    pathId: 1,
+    command: "rm",
+    error: "command risk detected: rm: recursive removal of the filesystem root",
+  };
+  const models = buildFlowModels({
+    nodes: [node(1, 0, "command", "rm -rf /tmp; rm -rf /")],
+    events: [
+      commandStarted(1, 1, "rm", [{ kind: 0, value: "-rf" }, { kind: 0, value: "/tmp" }]),
+      commandFinished(2, 1, { unresolved: true }),
+      commandStarted(3, 1, "rm", [{ kind: 0, value: "-rf" }, { kind: 0, value: "/" }]),
+      commandFinished(4, 1, { unresolved: true }),
+    ],
+    detections: [detection],
+  });
+
+  assert.deepEqual(models.ast.nodes[0].detections, [detection]);
+  assert.deepEqual(models.runtime.nodes[0].detections, []);
+  assert.deepEqual(models.runtime.nodes[1].detections, [detection]);
+});
+
 test("concreteDisplayValue renders an empty value as empty", () => {
   assert.equal(typeof playgroundModel.concreteDisplayValue, "function");
   assert.equal(playgroundModel.concreteDisplayValue(""), "");

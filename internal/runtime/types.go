@@ -54,6 +54,15 @@ type Invocation struct {
 	Unresolved *InvocationUnresolved `json:"unresolved,omitempty"`
 }
 
+// Redirect is one expanded file or descriptor redirection attached to the
+// current Shell statement. Here-document and here-string contents are exposed
+// through Invocation.Stdin instead.
+type Redirect struct {
+	FD       int    `json:"fd"`
+	Operator string `json:"operator"`
+	Target   string `json:"target"`
+}
+
 // CommandAction controls evaluation after a command returns.
 type CommandAction uint8
 

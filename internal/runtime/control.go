@@ -26,6 +26,7 @@ type ExecutionContext struct {
 	variableRollbackBytes int
 	nestedShellBytes      int
 	trace                 *executionTrace
+	redirects             []*Redirect
 }
 
 type variableRollback struct {
@@ -96,6 +97,7 @@ type redirectionPlan struct {
 	failureStates []*State
 	stdout        outputTarget
 	stderr        outputTarget
+	redirects     []*Redirect
 }
 
 type outputTarget struct {
@@ -528,6 +530,11 @@ func (e *ExecutionContext) evaluateRedirectedStatement(s *State, statement *synt
 	s.stderr = newCertain(stderrData)
 	unredirected := *statement
 	unredirected.Redirs = nil
+	redirectCheckpoint := len(e.redirects)
+	e.redirects = append(e.redirects, plan.redirects...)
+	defer func() {
+		e.redirects = e.redirects[:redirectCheckpoint]
+	}()
 	paths, evaluationErr := e.evaluateStatement(s, &unredirected)
 	for index := range paths {
 		path := paths[index]
