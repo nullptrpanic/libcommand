@@ -23,12 +23,14 @@ func (s *State) Directory() string {
 func (s *State) ChangeDirectory(name string) error {
 	maximum := s.maximumMemoryBytes()
 	estimated, ok := materialize.Add(0, len(name), maximum)
-	directory, directoryUnresolved := s.dir.Data()
-	if !path.IsAbs(name) {
-		estimated, ok = materialize.Add(estimated, len(directory)+1, maximum)
-	}
 	if !ok {
 		return materialize.LimitError(maximum)
+	}
+	directory, directoryUnresolved := s.dir.Data()
+	if !path.IsAbs(name) {
+		if _, ok = materialize.Add(estimated, len(directory)+1, maximum); !ok {
+			return materialize.LimitError(maximum)
+		}
 	}
 
 	resolved := s.fs.resolve(directory, name)
