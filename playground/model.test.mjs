@@ -727,7 +727,8 @@ test("risk detection marks the AST node and only the matching runtime occurrence
     nodeId: 1,
     pathId: 1,
     command: "rm",
-    error: "command risk detected: rm: recursive removal of the filesystem root",
+    type: "destructive_operation",
+    error: 'command risk detected: "rm": destructive_operation',
   };
   const models = buildFlowModels({
     nodes: [node(1, 0, "command", "rm -rf /tmp; rm -rf /")],

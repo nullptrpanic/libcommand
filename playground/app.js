@@ -792,7 +792,8 @@ function renderGraph(model, preserveSelection = false) {
 
   for (const node of renderedNodes) {
     const position = layout.positions.get(node.id);
-    const riskClass = node.detections?.length ? "risk-detected" : "";
+    const riskTypes = [...new Set((node.detections || []).map((detection) => detection.type).filter(Boolean))];
+    const riskClass = riskTypes.length ? "risk-detected" : "";
     const button = createElement("button", `flow-node ${node.definition.kind} ${node.state} ${riskClass}`);
     button.type = "button";
     button.style.left = `${position.x}px`;
@@ -800,7 +801,14 @@ function renderGraph(model, preserveSelection = false) {
     button.dataset.nodeId = node.id;
     button.dataset.sequence = String(node.sequence || 0);
     const head = createElement("div", "flow-node-head");
-    head.append(createElement("span", "", node.definition.kind), createElement("span", "flow-node-path", node.pathID ? `P${node.pathID}` : "STATIC"));
+    head.append(createElement("span", "", node.definition.kind));
+    if (riskTypes.length) {
+      const label = `${riskTypes[0]}${riskTypes.length > 1 ? ` +${riskTypes.length - 1}` : ""}`;
+      const riskType = createElement("span", "flow-node-risk-type", label);
+      riskType.title = riskTypes.join(", ");
+      head.append(riskType);
+    }
+    head.append(createElement("span", "flow-node-path", node.pathID ? `P${node.pathID}` : "STATIC"));
     const body = createElement("div", "flow-node-body");
     body.append(
       createElement("div", "flow-node-title", node.definition.snippet || node.definition.kind),
@@ -857,7 +865,7 @@ function renderInspector(node) {
     for (const detection of node.detections) {
       const item = createElement("article", "risk-detection");
       item.append(
-        createElement("strong", "", `${detection.command || "command"} · path ${detection.pathId || "?"} · event ${detection.sequence || "?"}`),
+        createElement("strong", "", `${detection.type || "risk"} · ${detection.command || "command"} · path ${detection.pathId || "?"} · event ${detection.sequence || "?"}`),
         createElement("pre", "", detection.error || "Command risk detected"),
       );
       section.append(item);

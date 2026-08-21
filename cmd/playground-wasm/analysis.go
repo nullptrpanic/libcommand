@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"path"
+	"strings"
 
 	"github.com/nullptrpanic/libcommand"
 	commandanalysis "github.com/nullptrpanic/libcommand/analysis"
@@ -22,14 +23,28 @@ var playgroundAnalysisCommands = map[string]libcommand.Command{
 	"ncat":      commandanalysis.Ncat,
 	"netcat":    commandanalysis.Netcat,
 	"socat":     commandanalysis.Socat,
+	"find":      commandanalysis.Find,
+	"mkfs":      commandanalysis.Mkfs,
+	"wipefs":    commandanalysis.Wipefs,
+	"dd":        commandanalysis.DD,
+	"sh":        commandanalysis.Shell,
+	"bash":      commandanalysis.Shell,
+	"dash":      commandanalysis.Shell,
+	"ksh":       commandanalysis.Shell,
+	"zsh":       commandanalysis.Shell,
+	"python":    commandanalysis.Python,
+	"python2":   commandanalysis.Python,
+	"python3":   commandanalysis.Python,
+	"perl":      commandanalysis.Perl,
 }
 
 type playgroundDetection struct {
-	Sequence uint64 `json:"sequence"`
-	NodeID   uint64 `json:"nodeId"`
-	PathID   uint64 `json:"pathId"`
-	Command  string `json:"command"`
-	Error    string `json:"error"`
+	Sequence uint64                   `json:"sequence"`
+	NodeID   uint64                   `json:"nodeId"`
+	PathID   uint64                   `json:"pathId"`
+	Command  string                   `json:"command"`
+	Type     commandanalysis.RiskType `json:"type"`
+	Error    string                   `json:"error"`
 }
 
 type playgroundCommandLocation struct {
@@ -58,17 +73,30 @@ func (a *playgroundAnalyzer) middleware(next libcommand.Command) libcommand.Comm
 func (a *playgroundAnalyzer) detect(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) {
 	handler := playgroundAnalysisCommands[invocation.Name]
 	if handler == nil {
-		handler = playgroundAnalysisCommands[path.Base(invocation.Name)]
+		base := path.Base(invocation.Name)
+		handler = playgroundAnalysisCommands[base]
+		if handler == nil && strings.HasPrefix(base, "mkfs.") {
+			handler = commandanalysis.Mkfs
+		}
+		if handler == nil && strings.HasPrefix(base, "python") {
+			handler = commandanalysis.Python
+		}
 	}
 	if handler == nil {
 		return
 	}
+	a.runDetector(ctx, shell, invocation, handler)
+}
+
+func (a *playgroundAnalyzer) runDetector(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation, handler libcommand.Command) bool {
 	_, err := handler(ctx, shell, invocation)
-	if !errors.Is(err, commandanalysis.ErrRiskDetected) {
-		return
+	detectionError := new(commandanalysis.DetectionError)
+	if !errors.As(err, &detectionError) {
+		return false
 	}
 	detection := &playgroundDetection{
 		Command: invocation.Name,
+		Type:    detectionError.Type,
 		Error:   err.Error(),
 	}
 	if a.current != nil {
@@ -77,6 +105,7 @@ func (a *playgroundAnalyzer) detect(ctx context.Context, shell *libcommand.Comma
 		detection.PathID = a.current.PathID
 	}
 	a.detections = append(a.detections, detection)
+	return true
 }
 
 func (a *playgroundAnalyzer) observe(event *libcommand.TraceEvent) {

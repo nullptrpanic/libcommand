@@ -430,6 +430,16 @@ code, pre { font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, m
 .flow-node-stat { padding: 4px 5px; border: 1px solid #172b38; border-radius: 4px; background: #0a141d; }
 .flow-node-stat span { display: block; color: #526b7a; font-size: 6px; text-transform: uppercase; }
 .flow-node-stat strong { color: #b8cbd5; font-size: 8px; }
+.flow-node-risk-type {
+  min-width: 0;
+  margin: 0 5px;
+  overflow: hidden;
+  color: #ffadb5;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
 .flow-node-path { color: var(--purple); }
 
 .flow-controls {
