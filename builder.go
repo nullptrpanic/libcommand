@@ -44,7 +44,9 @@ func (b *Builder) Command(name string, command Command) *Builder {
 // Middleware appends command middleware in registration order. Middleware is
 // applied to builtins, caller-provided commands, and the fallback after command
 // definitions are merged. Shell functions and evaluator-owned control
-// transfers are not commands and do not pass through this chain.
+// transfers are not commands and do not pass through this chain. Registering
+// middleware makes every command a reachability candidate so uncertain Shell
+// preconditions cannot hide it from the chain.
 func (b *Builder) Middleware(middlewares ...CommandMiddleware) *Builder {
 	b.middlewares = append(b.middlewares, middlewares...)
 	return b
@@ -67,6 +69,9 @@ func (b *Builder) Build() *Simulator {
 		commands[name] = definition
 	}
 	for _, definition := range commands {
+		if len(b.middlewares) != 0 {
+			definition.Candidate = true
+		}
 		definition.Command = applyCommandMiddleware(definition.Command, b.middlewares)
 	}
 	return &Simulator{commands: commands, limits: limits}

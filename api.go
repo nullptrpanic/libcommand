@@ -27,13 +27,18 @@ type SimulationRequest struct {
 	Stdin []byte
 	// Files initializes regular files in the isolated virtual filesystem.
 	// Relative paths are resolved against WorkingDir, and required parent
-	// directories are created. The simulator copies the map and its contents
-	// before evaluation.
+	// directories are created. During redirection evaluation, reading a missing
+	// file materializes an empty file, and writing one creates its missing
+	// parent directories. The simulator copies the map and its contents before
+	// evaluation.
 	Files map[string][]byte
 	// WorkingDir initializes PWD and the current directory. An empty value
 	// preserves the default root directory "/". Relative paths are resolved
 	// from that virtual root.
 	WorkingDir string
+	// User initializes the simulated current user. An empty value defaults to
+	// "user". It does not implicitly alter USER, LOGNAME, HOME, UID, or EUID.
+	User string
 }
 
 // Invocation is the expanded command passed to a registered command.

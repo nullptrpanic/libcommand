@@ -201,7 +201,7 @@ func TestExecuteDispatchAndTerminalErrors(t *testing.T) {
 		}, StatusIncomplete, true},
 		{"budget", "one; two", func(c *Config, _ *[]*dispatchedCommand) { c.MaxExecutionSteps = 1 }, StatusIncomplete, false},
 		{"unsupported declaration", "declare -z x=1", nil, StatusUnresolved, false},
-		{"unsupported redirect", "echo x 3> file", nil, StatusUnresolved, false},
+		{"arbitrary output descriptor", "echo x 3> file", nil, StatusCompleted, false},
 		{"host expansion branches", "if [[ $RANDOM -gt 1 ]]; then one; else two; fi", nil, StatusCompleted, false},
 	}
 	for _, test := range tests {
@@ -298,7 +298,7 @@ func TestRuntimeExpansionAndRedirectionHelpers(t *testing.T) {
 	}
 	s.vars.put("one", expand.Variable{Set: true, Kind: expand.String, Str: "a b"})
 	wordFile := parseForTest(t, "echo >$one", "word.sh")
-	if _, err := e.redirectWord(s, wordFile.Stmts[0].Redirs[0].Word); err == nil {
+	if _, _, err := e.redirectWord(s, wordFile.Stmts[0].Redirs[0].Word); err == nil {
 		t.Fatal("ambiguous redirect accepted")
 	}
 }

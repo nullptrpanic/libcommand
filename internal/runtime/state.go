@@ -14,6 +14,7 @@ import (
 type State struct {
 	vars               *variables
 	initialBytes       int
+	user               string
 	functions          map[string]*syntax.FuncDecl
 	functionsBytes     int
 	functionsShared    bool
@@ -106,6 +107,10 @@ func initializeState(request *Request, maximum int) (*State, error) {
 	if dir == "" {
 		dir = "/"
 	}
+	user := request.User
+	if user == "" {
+		user = "user"
+	}
 	vars := newVariables(request.Env)
 	vars.put("PWD", expand.Variable{Set: true, Exported: true, Kind: expand.String, Str: dir})
 	vars.put("0", expand.Variable{Set: true, Kind: expand.String, Str: "command.sh"})
@@ -125,6 +130,7 @@ func initializeState(request *Request, maximum int) (*State, error) {
 	}
 	s := &State{
 		vars:             vars,
+		user:             user,
 		functions:        make(map[string]*syntax.FuncDecl),
 		dir:              newCertain(dir),
 		stdin:            newCertain(append([]byte(nil), request.Stdin...)),
@@ -165,6 +171,7 @@ func newShellChild(parent *State) *State {
 	return &State{
 		vars:             vars,
 		initialBytes:     parent.initialBytes,
+		user:             parent.user,
 		functions:        make(map[string]*syntax.FuncDecl),
 		dir:              parent.dir,
 		stdin:            parent.stdin,
@@ -185,6 +192,7 @@ func (s *State) clone() *State {
 	return &State{
 		vars:               s.vars.clone(),
 		initialBytes:       s.initialBytes,
+		user:               s.user,
 		functions:          s.functions,
 		functionsBytes:     s.functionsBytes,
 		functionsShared:    true,

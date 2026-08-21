@@ -294,12 +294,14 @@ func TestUnknownDataBooleanForkConsumesExecutionStep(t *testing.T) {
 
 func TestUnknownDataConcreteBoundaries(t *testing.T) {
 	tests := []struct {
-		name   string
-		script string
+		name      string
+		script    string
+		status    Status
+		wantIssue bool
 	}{
-		{"command name", `value=$(unknown); $value argument`},
-		{"function argument", `forward() { registered "$1"; }; value=$(unknown); forward "$value"`},
-		{"redirection path", `value=$(unknown); echo data >"$value"`},
+		{"command name", `value=$(unknown); $value argument`, StatusCompleted, false},
+		{"function argument", `forward() { registered "$1"; }; value=$(unknown); forward "$value"`, StatusUnresolved, true},
+		{"redirection path", `value=$(unknown); echo data >"$value"`, StatusCompleted, false},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -308,8 +310,11 @@ func TestUnknownDataConcreteBoundaries(t *testing.T) {
 				LookupCommand:     func(string) *CommandDefinition { return nil },
 			})
 			path := mustPath(t, paths)
-			if err != nil || path.status != StatusUnresolved || path.state.issue == nil || !strings.Contains(path.state.issue.Error(), "unresolved command output") {
+			if err != nil || path.status != test.status || (path.state.issue != nil) != test.wantIssue {
 				t.Fatalf("path=%#v err=%v", path, err)
+			}
+			if test.wantIssue && !strings.Contains(path.state.issue.Error(), "unresolved command output") {
+				t.Fatalf("issue = %v", path.state.issue)
 			}
 		})
 	}
@@ -488,9 +493,20 @@ func TestUnknownDataAdditionalConsumers(t *testing.T) {
 			MaxExecutionSteps: 20,
 			LookupCommand:     func(string) *CommandDefinition { return nil },
 		})
-		path := mustPath(t, paths)
-		if err != nil || path.status != StatusUnresolved || path.state.issue == nil || !strings.Contains(path.state.issue.Error(), "unresolved command output") {
-			t.Fatalf("path=%#v err=%v", path, err)
+		if err != nil || len(paths) != 2 {
+			t.Fatalf("paths=%#v err=%v", paths, err)
+		}
+		unknownItems := 0
+		for _, path := range paths {
+			if path.status != StatusCompleted || path.state.issue != nil {
+				t.Fatalf("path=%#v", path)
+			}
+			if path.state.vars.isUnknown("item") {
+				unknownItems++
+			}
+		}
+		if unknownItems != 1 {
+			t.Fatalf("unknown item paths = %d, want one abstract iteration", unknownItems)
 		}
 	})
 

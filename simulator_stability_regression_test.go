@@ -17,23 +17,23 @@ fi`
 	requireFirstArguments(t, source, []string{"outer"})
 }
 
-func TestSimulatorCorrelatesInputOnlySubstitutionFailureState(t *testing.T) {
+func TestSimulatorMaterializesMissingInputOnlySubstitution(t *testing.T) {
 	source := `value=outer
 if value=$(< /missing/file); then
-  :
+  if [[ -e /missing/file && -z "$value" ]]; then lark-cli empty; else lark-cli wrong; fi
 else
-  if [[ -e /missing/file ]]; then lark-cli leaked; else lark-cli "clean:$value"; fi
+  lark-cli failure
 fi`
-	requireFirstArguments(t, source, []string{"clean:"})
+	requireFirstArguments(t, source, []string{"empty"})
 }
 
-func TestSimulatorExploresEachUnknownRedirectionFailure(t *testing.T) {
+func TestSimulatorCreatesParentsForEachOutputRedirection(t *testing.T) {
 	source := `if : > /first/file > /second/file; then
   lark-cli success
 else
   if [[ -e /first/file ]]; then lark-cli failure-second; else lark-cli failure-first; fi
 fi`
-	requireFirstArguments(t, source, []string{"success", "failure-first", "failure-second"})
+	requireFirstArguments(t, source, []string{"success"})
 }
 
 func TestSimulatorRetainsCorrelatedStateAfterExitStatusIsOverwritten(t *testing.T) {
@@ -42,10 +42,10 @@ func TestSimulatorRetainsCorrelatedStateAfterExitStatusIsOverwritten(t *testing.
   :
   if [[ -e /missing/file ]]; then lark-cli success; else lark-cli failure; fi
 }`
-	requireFirstArguments(t, source, []string{"success", "failure"})
+	requireFirstArguments(t, source, []string{"success"})
 }
 
-func TestSimulatorRetainsEarlierCommandSubstitutionAlternatives(t *testing.T) {
+func TestSimulatorReadsMissingInputOnlySubstitutionAsConcreteEmpty(t *testing.T) {
 	var calls [][]string
 	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		arguments := make([]string, 0, len(invocation.Args))
@@ -64,7 +64,7 @@ func TestSimulatorRetainsEarlierCommandSubstitutionAlternatives(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
-	want := [][]string{{"<unresolved>", ""}, {"", ""}}
+	want := [][]string{{"", ""}}
 	if !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
 	}
@@ -81,24 +81,24 @@ func TestSimulatorCorrelatesNegatedUnknownState(t *testing.T) {
 	requireFirstArguments(t, source, []string{"else", "then"})
 }
 
-func TestSimulatorRetainsUnknownPipelineState(t *testing.T) {
+func TestSimulatorPropagatesCreatedFilesFromPipeline(t *testing.T) {
 	source := `{
   : > /missing/file | :
   if [[ -e /missing/file ]]; then lark-cli success; else lark-cli failure; fi
 }`
-	requireFirstArguments(t, source, []string{"success", "failure"})
+	requireFirstArguments(t, source, []string{"success"})
 }
 
-func TestSimulatorRetainsUnknownBackgroundState(t *testing.T) {
+func TestSimulatorPropagatesCreatedFilesFromBackgroundCommand(t *testing.T) {
 	source := `{
   : > /missing/file &
   wait
   if [[ -e /missing/file ]]; then lark-cli success; else lark-cli failure; fi
 }`
-	requireFirstArguments(t, source, []string{"success", "failure"})
+	requireFirstArguments(t, source, []string{"success"})
 }
 
-func TestSimulatorDoesNotDuplicateRedirectionFailureAcrossInnerBranches(t *testing.T) {
+func TestSimulatorKeepsInnerBranchesWhenCreatingOutputParents(t *testing.T) {
 	source := `{
   { if unknown-command; then branch=a; else branch=b; fi; } > /missing/file
   if [[ -e /missing/file ]]; then
@@ -107,7 +107,7 @@ func TestSimulatorDoesNotDuplicateRedirectionFailureAcrossInnerBranches(t *testi
     lark-cli "failure:${branch-unset}"
   fi
 }`
-	requireFirstArguments(t, source, []string{"success:a", "success:b", "failure:unset"})
+	requireFirstArguments(t, source, []string{"success:a", "success:b"})
 }
 
 func TestSimulatorPreservesSparseIndexedArrayMutations(t *testing.T) {

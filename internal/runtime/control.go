@@ -25,6 +25,7 @@ type ExecutionContext struct {
 	variableRollbacks     []*variableRollback
 	variableRollbackBytes int
 	nestedShellBytes      int
+	backgroundStepLimit   int
 	trace                 *executionTrace
 	redirects             []*Redirect
 }
@@ -91,13 +92,15 @@ const (
 )
 
 type redirectionPlan struct {
-	stdin         *uncertain[[]byte]
+	descriptors   map[int]*descriptorTarget
 	stdinReplaced bool
-	stdinFile     string
-	failureStates []*State
-	stdout        outputTarget
-	stderr        outputTarget
 	redirects     []*Redirect
+}
+
+type descriptorTarget struct {
+	input     *uncertain[[]byte]
+	inputFile string
+	output    *outputTarget
 }
 
 type outputTarget struct {
@@ -105,6 +108,7 @@ type outputTarget struct {
 	captureFD int
 	file      string
 	append    bool
+	external  bool
 }
 
 // NewExecutionContext creates the mutable execution state for one simulation.
@@ -525,7 +529,11 @@ func (e *ExecutionContext) evaluateRedirectedStatement(s *State, statement *synt
 	stderrData, _ := originalStderr.Data()
 	stdoutPrefix := len(stdoutData)
 	stderrPrefix := len(stderrData)
-	s.stdin = cloneUncertainBytes(plan.stdin)
+	stdin := plan.descriptors[0].input
+	if stdin == nil {
+		stdin = newCertain[[]byte](nil)
+	}
+	s.stdin = cloneUncertainBytes(stdin)
 	s.stdout = newCertain(stdoutData)
 	s.stderr = newCertain(stderrData)
 	unredirected := *statement
@@ -558,23 +566,6 @@ func (e *ExecutionContext) evaluateRedirectedStatement(s *State, statement *synt
 		}
 		if plan.stdinReplaced {
 			path.state.stdin = originalStdin
-		}
-	}
-	if len(plan.failureStates) != 0 && evaluationErr == nil && !e.stop {
-		if status := e.reserveExecutionSteps(s, len(plan.failureStates), sourceLocation(statement)); status != StatusCompleted {
-			if len(paths) == 0 {
-				return []*pathResult{{state: s, status: status}}, nil
-			}
-			for _, path := range paths {
-				mergeIssue(path.state, s)
-				path.status = status
-			}
-			return paths, nil
-		}
-		for _, failureState := range plan.failureStates {
-			failure := failureState.clone()
-			failure.setExitCode(1)
-			paths = append(paths, &pathResult{state: failure, status: StatusCompleted})
 		}
 	}
 	return paths, evaluationErr

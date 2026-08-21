@@ -36,6 +36,7 @@ func (e *ExecutionContext) invokeCommand(state *State, source *location, command
 	if err == nil {
 		paths, err = commandContext.applyResult(result)
 	}
+	commandContext.restoreUser(paths)
 	e.trace.commandFinished(e, state, commandSyntax, result, err)
 	if err != nil {
 		if expansionRequested(err) {

@@ -22,8 +22,11 @@ func (e *ExecutionContext) evaluateCallStatement(s *State, call *syntax.CallExpr
 		result, resultErr := e.outcomeFromExpansionError(s, err, fmt.Sprintf("expand command: %v", err), sourceLocation(call))
 		return []*pathResult{{state: s, status: result.status}}, resultErr
 	}
-	if len(arguments) == 0 || arguments[0].Kind == ArgumentUnresolved {
+	if len(arguments) == 0 {
 		return e.unresolvedPath(s, "command name depends on unresolved command output", sourceLocation(call.Args[0])), nil
+	}
+	if arguments[0].Kind == ArgumentUnresolved {
+		return e.evaluateExpandedCommand(s, call, call, "", arguments[1:], call)
 	}
 	if arguments[0].Value == "" {
 		return e.unresolvedPath(s, "command name expanded to an empty value", sourceLocation(call)), nil

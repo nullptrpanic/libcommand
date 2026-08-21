@@ -61,6 +61,7 @@ func (s *Simulator) simulate(ctx context.Context, request *SimulationRequest, tr
 		Stdin:      request.Stdin,
 		Files:      files,
 		WorkingDir: workingDir,
+		User:       request.User,
 	})
 }
 

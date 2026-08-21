@@ -114,8 +114,8 @@ func (fs *memoryFS) writeValue(name string, contents []byte, appendMode, unknown
 	return fs.writeValueMode(name, contents, appendMode, unknown, false)
 }
 
-func (fs *memoryFS) writeAbstract(name string, contents []byte, appendMode, unknown bool) error {
-	return fs.writeValueMode(name, contents, appendMode, unknown, true)
+func (fs *memoryFS) writeWithParents(name string, contents []byte, appendMode bool) error {
+	return fs.writeValueMode(name, contents, appendMode, false, true)
 }
 
 func (fs *memoryFS) writeValueMode(name string, contents []byte, appendMode, unknown, createParents bool) error {

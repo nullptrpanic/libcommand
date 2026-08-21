@@ -38,6 +38,11 @@ func executeShell(_ context.Context, shell *runtime.CommandContext, invocation *
 				program.Options["command-string"] = true
 			case 'l':
 				// Login startup files are outside the virtual Shell state.
+			case 'i':
+				// Prompts, job control, and terminal initialization do not alter
+				// the virtual execution of source read from stdin.
+			case 'n':
+				program.ParseOnly = enabled
 			case 's':
 				if !enabled {
 					return unsupportedShellOption(shell, name, argument)

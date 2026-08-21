@@ -81,6 +81,13 @@ func (e *ExecutionContext) evaluateWhile(s *State, clause *syntax.WhileClause) (
 		if err := e.checkPathGroupsMaterialization(0, sourceLocation(clause), completed, active); err != nil {
 			return append(completed, active...), err
 		}
+		if e.backgroundLoopBudgetExhausted() {
+			// A background loop may use at most half of the remaining execution
+			// budget. Finite jobs still complete while an unbounded asynchronous
+			// loop cannot prevent the foreground from making progress.
+			completed = append(completed, active...)
+			active = nil
+		}
 	}
 	return completed, nil
 }
@@ -117,8 +124,9 @@ func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, l
 		return []*pathResult{{state: s, status: result.status}}, nil
 	}
 	unknownItems := false
+	zeroIteration := false
 	if _, unknown := firstUnknownWord(s, loop.Items); unknown {
-		if clause.Select || !e.candidates.contains(clause) {
+		if clause.Select {
 			result := e.unresolved(s, "for item list depends on unresolved command output", sourceLocation(loop))
 			return []*pathResult{{state: s, status: result.status}}, nil
 		}
@@ -127,6 +135,7 @@ func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, l
 		}
 		items = []string{""}
 		unknownItems = true
+		zeroIteration = true
 	}
 	if s.vars.Get(loop.Name.Value).ReadOnly {
 		s.setExitCode(1)
@@ -139,6 +148,9 @@ func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, l
 	s.setExitCode(0)
 	active := []*pathResult{{state: s, status: StatusCompleted}}
 	completed := make([]*pathResult, 0)
+	if zeroIteration {
+		completed = append(completed, &pathResult{state: s.clone(), status: StatusCompleted})
+	}
 	for itemIndex, item := range items {
 		bodyInputs := make([]*pathResult, 0, len(active))
 		for _, current := range active {
@@ -300,6 +312,10 @@ func (e *ExecutionContext) evaluateArithmeticFor(s *State, clause *syntax.ForCla
 		if err := e.checkPathGroupsMaterialization(0, sourceLocation(clause), completed, active); err != nil {
 			return append(completed, active...), err
 		}
+		if e.backgroundLoopBudgetExhausted() {
+			completed = append(completed, active...)
+			active = nil
+		}
 	}
 	return completed, nil
 }
@@ -409,6 +425,10 @@ func (e *ExecutionContext) evaluateSelect(s *State, clause *syntax.ForClause, lo
 		}
 		if err := e.checkPathGroupsMaterialization(0, sourceLocation(clause), completed, next); err != nil {
 			return append(completed, next...), err
+		}
+		if e.backgroundLoopBudgetExhausted() {
+			completed = append(completed, next...)
+			next = nil
 		}
 		active = next
 	}

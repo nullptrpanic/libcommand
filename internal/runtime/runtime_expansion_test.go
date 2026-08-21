@@ -424,7 +424,7 @@ func TestIfAndLogicalTerminalAndErrorPropagation(t *testing.T) {
 		}
 	})
 
-	t.Run("if stop and unresolved condition", func(t *testing.T) {
+	t.Run("if stop and abstract redirect condition", func(t *testing.T) {
 		e, s := newExecutorForTest(context.Background(), 20, &Request{}, func(context.Context, *State, *Invocation) (*CommandResult, error) {
 			t.Fatal("dispatch while ExecutionContext stopped")
 			return nil, nil
@@ -439,8 +439,8 @@ func TestIfAndLogicalTerminalAndErrorPropagation(t *testing.T) {
 		e, s = newExecutorForTest(context.Background(), 20, &Request{}, noOpDispatch)
 		clause = parseForTest(t, `if echo value >$RANDOM; then body; fi`, "flow-errors.sh").Stmts[0].Cmd.(*syntax.IfClause)
 		paths, err = e.evaluateIf(s, clause)
-		if err != nil || len(paths) != 1 || paths[0].status != StatusUnresolved || paths[0].state.issue == nil {
-			t.Fatalf("unresolved paths=%#v err=%v", paths, err)
+		if err != nil || len(paths) != 1 || paths[0].status != StatusCompleted || paths[0].state.issue != nil {
+			t.Fatalf("abstract redirect paths=%#v err=%v", paths, err)
 		}
 	})
 
@@ -451,7 +451,7 @@ func TestIfAndLogicalTerminalAndErrorPropagation(t *testing.T) {
 		})
 	})
 
-	t.Run("logical left context error stop and unresolved", func(t *testing.T) {
+	t.Run("logical left context error stop and abstract redirect", func(t *testing.T) {
 		ctx, cancel := context.WithCancel(context.Background())
 		cancel()
 		e, s := newExecutorForTest(ctx, 20, &Request{}, noOpDispatch)
@@ -472,8 +472,8 @@ func TestIfAndLogicalTerminalAndErrorPropagation(t *testing.T) {
 		e, s = newExecutorForTest(context.Background(), 20, &Request{}, noOpDispatch)
 		command = parseForTest(t, `echo value >$RANDOM && right`, "flow-errors.sh").Stmts[0].Cmd.(*syntax.BinaryCmd)
 		paths, err = e.evaluateLogical(s, command)
-		if err != nil || len(paths) != 1 || paths[0].status != StatusUnresolved {
-			t.Fatalf("unresolved paths=%#v err=%v", paths, err)
+		if err != nil || len(paths) != 1 || paths[0].status != StatusCompleted || paths[0].state.issue != nil {
+			t.Fatalf("abstract redirect paths=%#v err=%v", paths, err)
 		}
 	})
 
@@ -528,22 +528,26 @@ func TestSubstitutionStatusAndRedirectionErrors(t *testing.T) {
 
 	t.Run("redirection descriptors and expansion errors", func(t *testing.T) {
 		e, s := newNoOpExecutor(context.Background(), 20, &Request{})
+		if err := s.fs.write("/in", []byte("input"), false); err != nil {
+			t.Fatal(err)
+		}
 		for _, test := range []struct {
 			name     string
 			redirect *syntax.Redirect
 			match    string
+			wantErr  bool
 		}{
-			{"named fd", &syntax.Redirect{N: &syntax.Lit{Value: "named"}, Op: syntax.RdrOut, Word: coverageWord("out")}, "named file descriptor"},
-			{"input fd", &syntax.Redirect{N: &syntax.Lit{Value: "1"}, Op: syntax.RdrIn, Word: coverageWord("in")}, "input file descriptor"},
-			{"here string expansion", &syntax.Redirect{Op: syntax.WordHdoc, Word: coverageRandomWord()}, "redirection"},
-			{"here document fd", &syntax.Redirect{N: &syntax.Lit{Value: "1"}, Op: syntax.Hdoc, Hdoc: coverageWord("value")}, "here-document file descriptor"},
-			{"here document expansion", &syntax.Redirect{Op: syntax.Hdoc, Hdoc: coverageProcessWord()}, "here-document"},
-			{"duplicate fd", &syntax.Redirect{N: &syntax.Lit{Value: "1"}, Op: syntax.DplOut, Word: coverageWord("3")}, "output descriptor duplication"},
-			{"duplicate expansion", &syntax.Redirect{N: &syntax.Lit{Value: "2"}, Op: syntax.DplOut, Word: coverageRandomWord()}, "redirection"},
+			{"named fd", &syntax.Redirect{N: &syntax.Lit{Value: "named"}, Op: syntax.RdrOut, Word: coverageWord("out")}, "named file descriptor", true},
+			{"input fd", &syntax.Redirect{N: &syntax.Lit{Value: "1"}, Op: syntax.RdrIn, Word: coverageWord("in")}, "", false},
+			{"here string expansion", &syntax.Redirect{Op: syntax.WordHdoc, Word: coverageRandomWord()}, "", false},
+			{"here document fd", &syntax.Redirect{N: &syntax.Lit{Value: "1"}, Op: syntax.Hdoc, Hdoc: coverageWord("value")}, "", false},
+			{"here document expansion", &syntax.Redirect{Op: syntax.Hdoc, Hdoc: coverageProcessWord()}, "here-document", true},
+			{"duplicate fd", &syntax.Redirect{N: &syntax.Lit{Value: "1"}, Op: syntax.DplOut, Word: coverageWord("3")}, "", false},
+			{"duplicate expansion", &syntax.Redirect{N: &syntax.Lit{Value: "2"}, Op: syntax.DplOut, Word: coverageRandomWord()}, "", false},
 		} {
 			t.Run(test.name, func(t *testing.T) {
 				_, err := e.prepareRedirections(s, []*syntax.Redirect{test.redirect})
-				if err == nil || !strings.Contains(err.Error(), test.match) {
+				if (err != nil) != test.wantErr || test.wantErr && !strings.Contains(err.Error(), test.match) {
 					t.Fatalf("error=%v", err)
 				}
 			})

@@ -470,7 +470,7 @@ exit -1`
 	requireFirstArguments(t, source, []string{"return:44", "exit:255"})
 }
 
-func TestSimulatorExploresMissingInputRedirection(t *testing.T) {
+func TestSimulatorReadsMissingInputRedirectionAsEmptyFile(t *testing.T) {
 	var calls []string
 	simulator := mustBuildSimulator(t, "lark-cli", recordFirstArgument(t, &calls))
 	source := `if lark-cli called < missing; then
@@ -481,31 +481,31 @@ fi`
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"called", "wrong", "fallback"}; !reflect.DeepEqual(calls, want) {
+	if want := []string{"called", "wrong"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
 	}
 }
 
-func TestSimulatorExploresMissingInputOnlyCommandSubstitution(t *testing.T) {
+func TestSimulatorReadsMissingInputOnlySubstitutionAsEmptyFile(t *testing.T) {
 	var calls []string
 	simulator := mustBuildSimulator(t, "lark-cli", recordFirstArgument(t, &calls))
 	source := `if value=$(<missing); then lark-cli wrong; else lark-cli fallback; fi`
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"wrong", "fallback"}; !reflect.DeepEqual(calls, want) {
+	if want := []string{"wrong"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
 	}
 }
 
-func TestSimulatorExploresUnspecifiedOutputRedirection(t *testing.T) {
+func TestSimulatorRejectsOutputConflictsAndCreatesMissingParents(t *testing.T) {
 	tests := []struct {
 		name   string
 		source string
 		want   []string
 	}{
 		{name: "directory target", source: `lark-cli side-effect >/ `, want: []string{"fallback"}},
-		{name: "missing parent", source: `lark-cli side-effect >/missing/target`, want: []string{"side-effect", "wrong", "fallback"}},
+		{name: "missing parent", source: `lark-cli side-effect >/missing/target`, want: []string{"side-effect", "wrong"}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -1010,7 +1010,7 @@ lark-cli "$first" "$second"`
 	}
 }
 
-func TestSimulatorExecClearEnvironmentAndRejectsUnsupportedIdentityOptions(t *testing.T) {
+func TestSimulatorExecClearEnvironmentAndAcceptsIdentityOptions(t *testing.T) {
 	var environments []map[string]string
 	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		environments = append(environments, maps.Clone(invocation.Env))
@@ -1032,11 +1032,11 @@ func TestSimulatorExecClearEnvironmentAndRejectsUnsupportedIdentityOptions(t *te
 	for _, source := range []string{`exec -a custom lark-cli`, `exec -l lark-cli`} {
 		environments = nil
 		err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source})
-		if err == nil || !strings.Contains(err.Error(), "not supported") {
+		if err != nil {
 			t.Fatalf("source %q error = %v", source, err)
 		}
-		if len(environments) != 0 {
-			t.Fatalf("source %q dispatched with environments %#v", source, environments)
+		if len(environments) != 1 {
+			t.Fatalf("source %q environments = %#v", source, environments)
 		}
 	}
 }
@@ -1107,13 +1107,16 @@ func TestSimulatorExpandsDirectDeclarationOnlyOnce(t *testing.T) {
 }
 
 func TestSimulatorDoesNotRetainDeferredDeclarationExpansionAsIssue(t *testing.T) {
+	simulator := NewBuilder().Command("broken", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+		return nil, fmt.Errorf("later handler failure")
+	}).Build()
 	for _, source := range []string{
-		`declare value="$(echo resolved)"; echo data 3>invalid`,
-		`let "value = $(echo 1)"; echo data 3>invalid`,
+		`declare value="$(echo resolved)"; broken`,
+		`let "value = $(echo 1)"; broken`,
 	} {
-		err := NewBuilder().Build().Simulate(context.Background(), &SimulationRequest{Source: source})
-		if err == nil || !strings.Contains(err.Error(), "unsupported output file descriptor 3") {
-			t.Fatalf("source %q: Simulate() error = %v, want the later redirection error", source, err)
+		err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source})
+		if err == nil || !strings.Contains(err.Error(), "later handler failure") {
+			t.Fatalf("source %q: Simulate() error = %v, want the later handler error", source, err)
 		}
 	}
 }

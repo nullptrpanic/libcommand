@@ -607,13 +607,13 @@ fi`
 	}
 }
 
-func TestSimulatorCorrelatesUnknownRedirectionStateWithStatus(t *testing.T) {
+func TestSimulatorCreatesMissingOutputParents(t *testing.T) {
 	source := `if : > /candidate/file; then
   lark-cli redirection-success
 else
   if [ -e /candidate/file ]; then lark-cli redirection-impossible; else lark-cli redirection-failure; fi
 fi`
-	requireFirstArguments(t, source, []string{"redirection-success", "redirection-failure"})
+	requireFirstArguments(t, source, []string{"redirection-success"})
 }
 
 func TestSimulatorSupportsEchoNoNewlineAndEmptySourceStatus(t *testing.T) {
@@ -895,26 +895,31 @@ func TestSimulatorCommandStopIsNormalAndGlobal(t *testing.T) {
 }
 
 func TestSimulatorCommandStopDoesNotMaskEarlierPathError(t *testing.T) {
-	simulator := mustBuildSimulator(t, "stop", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
-		return &CommandResult{Action: CommandStop}, nil
-	})
+	simulator := NewBuilder().
+		Command("stop", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+			return &CommandResult{Action: CommandStop}, nil
+		}).
+		Command("broken", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+			return nil, errors.New("earlier handler failure")
+		}).
+		Build()
 	tests := []struct {
 		name   string
 		source string
 	}{
 		{
 			name:   "nested if condition",
-			source: `if if [[ $RANDOM ]]; then echo x 3>bad; else stop; fi; then :; fi`,
+			source: `if if [[ $RANDOM ]]; then broken; else stop; fi; then :; fi`,
 		},
 		{
 			name:   "logical left operand",
-			source: `if [[ $RANDOM ]]; then echo x 3>bad; else stop; fi && :`,
+			source: `if [[ $RANDOM ]]; then broken; else stop; fi && :`,
 		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			err := simulator.Simulate(context.Background(), &SimulationRequest{Source: test.source})
-			if err == nil || !strings.Contains(err.Error(), "unsupported output file descriptor 3") {
+			if err == nil || !strings.Contains(err.Error(), "earlier handler failure") {
 				t.Fatalf("Simulate() error = %v", err)
 			}
 		})

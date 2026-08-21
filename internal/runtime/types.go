@@ -13,6 +13,7 @@ type Request struct {
 	Stdin      []byte
 	Files      map[string][]byte
 	WorkingDir string
+	User       string
 }
 
 // ArgumentKind describes whether one expanded command argument is concrete.
@@ -35,6 +36,8 @@ type Argument struct {
 // InvocationUnresolved identifies non-argument invocation fields whose values
 // could not be resolved by the simulator.
 type InvocationUnresolved struct {
+	// Name reports that Invocation.Name could not be resolved.
+	Name bool `json:"name,omitempty"`
 	// Env lists unresolved exported variable names in sorted order.
 	Env []string `json:"env,omitempty"`
 	// Dir reports that Invocation.Dir is unresolved.
@@ -58,9 +61,10 @@ type Invocation struct {
 // current Shell statement. Here-document and here-string contents are exposed
 // through Invocation.Stdin instead.
 type Redirect struct {
-	FD       int    `json:"fd"`
-	Operator string `json:"operator"`
-	Target   string `json:"target"`
+	FD         int    `json:"fd"`
+	Operator   string `json:"operator"`
+	Target     string `json:"target"`
+	Unresolved bool   `json:"unresolved,omitempty"`
 }
 
 // CommandAction controls evaluation after a command returns.

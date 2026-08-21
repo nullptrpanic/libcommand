@@ -14,6 +14,7 @@ type ShellProgram struct {
 	Name      string
 	Arguments []string
 	Options   map[string]bool
+	ParseOnly bool
 }
 
 // Invoke dispatches a command without consulting shell functions. When
@@ -174,11 +175,28 @@ func (c *CommandContext) executeRunShell(program *ShellProgram) ([]*pathResult, 
 		mergeIssue(parent, child)
 		return []*pathResult{{state: parent, status: status}}, nil
 	}
+	if program.ParseOnly {
+		if _, parseErr := Parse(c.execution.ctx, program.Source, program.Name); parseErr != nil {
+			if result, resultErr, incomplete := c.execution.incompleteFromEvaluationError(child, parseErr, unknownLocation); incomplete {
+				mergeIssue(parent, child)
+				return []*pathResult{{state: parent, status: result.status}}, resultErr
+			}
+			child.setExitCode(2)
+			status := c.execution.appendStreams(child, nil, []byte(parseErr.Error()+"\n"), false, false, c.source)
+			return c.shellChildResults(parent, []*pathResult{{state: child, status: status}}, nil)
+		}
+		child.setExitCode(0)
+		return c.shellChildResults(parent, []*pathResult{{state: child, status: StatusCompleted}}, nil)
+	}
 	childPaths, evaluationErr := c.execution.evaluateCommandSourceText(child, program.Source, program.Name, 2)
 	childPaths, trapErr := c.execution.evaluateExitTraps(childPaths)
 	if evaluationErr == nil {
 		evaluationErr = trapErr
 	}
+	return c.shellChildResults(parent, childPaths, evaluationErr)
+}
+
+func (c *CommandContext) shellChildResults(parent *State, childPaths []*pathResult, evaluationErr error) ([]*pathResult, error) {
 	paths := make([]*pathResult, 0, len(childPaths))
 	for _, childPath := range childPaths {
 		result := parent.clone()

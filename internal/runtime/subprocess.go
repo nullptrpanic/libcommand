@@ -14,6 +14,11 @@ func (e *ExecutionContext) evaluateBackground(s *State, statement *syntax.Stmt) 
 	child.resetOutput()
 	foreground := *statement
 	foreground.Background = false
+	previousBackgroundLimit := e.backgroundStepLimit
+	e.backgroundStepLimit = e.nextBackgroundStepLimit()
+	defer func() {
+		e.backgroundStepLimit = previousBackgroundLimit
+	}()
 	childPaths, err := e.evaluateStatement(child, &foreground)
 	if err == nil {
 		childPaths, err = e.resolveCorrelatedExitStatuses(childPaths, sourceLocation(statement))
@@ -40,6 +45,26 @@ func (e *ExecutionContext) evaluateBackground(s *State, statement *syntax.Stmt) 
 		results = append(results, &pathResult{state: parent, status: status})
 	}
 	return results, err
+}
+
+func (e *ExecutionContext) nextBackgroundStepLimit() int {
+	maximum := e.config.MaxExecutionSteps
+	if e.backgroundStepLimit > 0 && e.backgroundStepLimit < maximum {
+		maximum = e.backgroundStepLimit
+	}
+	remaining := maximum - e.executedSteps
+	if remaining <= 0 {
+		return e.executedSteps
+	}
+	allowance := remaining / 2
+	if allowance == 0 {
+		allowance = 1
+	}
+	return e.executedSteps + allowance
+}
+
+func (e *ExecutionContext) backgroundLoopBudgetExhausted() bool {
+	return e.backgroundStepLimit > 0 && e.executedSteps >= e.backgroundStepLimit
 }
 
 func (e *ExecutionContext) evaluateSubshell(s *State, subshell *syntax.Subshell) ([]*pathResult, error) {

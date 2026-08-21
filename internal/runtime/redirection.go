@@ -5,7 +5,9 @@ import (
 	"fmt"
 	iofs "io/fs"
 	"strconv"
+	"strings"
 
+	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
 
@@ -23,6 +25,9 @@ func (e *ExecutionContext) applyOutputTargets(s *State, plan *redirectionPlan, s
 	var capturedStdoutUnknown bool
 	var capturedStderrUnknown bool
 	write := func(target *outputTarget, contents []byte, unknown bool) error {
+		if target == nil || target.external {
+			return nil
+		}
 		if target.file != "" {
 			return s.fs.writeValue(target.file, contents, target.append, unknown)
 		}
@@ -35,16 +40,18 @@ func (e *ExecutionContext) applyOutputTargets(s *State, plan *redirectionPlan, s
 		capturedStderrUnknown = capturedStderrUnknown || unknown
 		return nil
 	}
-	if plan.stdout.id == plan.stderr.id {
+	stdoutTarget := plan.descriptors[1].output
+	stderrTarget := plan.descriptors[2].output
+	if stdoutTarget != nil && stderrTarget != nil && stdoutTarget.id == stderrTarget.id {
 		combined := append(append([]byte(nil), stdout...), stderr...)
-		if err := write(&plan.stdout, combined, stdoutUnknown || stderrUnknown); err != nil {
+		if err := write(stdoutTarget, combined, stdoutUnknown || stderrUnknown); err != nil {
 			return nil, nil, false, false, err
 		}
 	} else {
-		if err := write(&plan.stdout, stdout, stdoutUnknown); err != nil {
+		if err := write(stdoutTarget, stdout, stdoutUnknown); err != nil {
 			return nil, nil, false, false, err
 		}
-		if err := write(&plan.stderr, stderr, stderrUnknown); err != nil {
+		if err := write(stderrTarget, stderr, stderrUnknown); err != nil {
 			return nil, nil, false, false, err
 		}
 	}
@@ -65,24 +72,24 @@ func (e *ExecutionContext) inputOnlySubstitution(s *State, substitution *syntax.
 			return nil, nil, false, nil
 		}
 	}
-	filename, err := e.redirectWord(s, statement.Redirs[0].Word)
+	filename, unresolved, err := e.redirectWord(s, statement.Redirs[0].Word)
 	if err != nil {
 		return nil, nil, true, err
+	}
+	if unresolved || isExternalDevicePath(filename) {
+		return &substitutionResult{
+			stdout:     newUnresolved[[]byte](nil),
+			exitStatus: newUnresolved(0),
+		}, nil, true, nil
 	}
 	directory, _ := s.dir.Data()
 	filename = s.fs.resolve(directory, filename)
 	contents, unknown, exists := s.fs.readFile(filename)
 	if !exists {
-		if e.discoveryDepth > 0 {
-			failure := s.snapshotForUnknownFailure()
-			if err := s.fs.writeAbstract(filename, nil, false, true); err == nil {
-				return &substitutionResult{
-					stdout:     newUnresolved[[]byte](nil),
-					exitStatus: newUnresolved(0),
-				}, &substitutionFailure{state: failure, stdout: newCertain[[]byte](nil)}, true, nil
-			}
+		if err := s.fs.writeWithParents(filename, nil, false); err != nil {
+			return nil, nil, true, outputRedirectionError(filename, err)
 		}
-		return nil, nil, true, &redirectionFailure{message: fmt.Sprintf("%s: No such file or directory", filename)}
+		return &substitutionResult{stdout: newCertain[[]byte](nil), exitStatus: newCertain(0)}, nil, true, nil
 	}
 	stdout := newCertain(contents)
 	if unknown {
@@ -93,9 +100,11 @@ func (e *ExecutionContext) inputOnlySubstitution(s *State, substitution *syntax.
 
 func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.Redirect) (*redirectionPlan, error) {
 	plan := &redirectionPlan{
-		stdin:  cloneUncertainBytes(s.stdin),
-		stdout: outputTarget{id: 1, captureFD: 1},
-		stderr: outputTarget{id: 2, captureFD: 2},
+		descriptors: map[int]*descriptorTarget{
+			0: {input: cloneUncertainBytes(s.stdin)},
+			1: {output: &outputTarget{id: 1, captureFD: 1}},
+			2: {output: &outputTarget{id: 2, captureFD: 2}},
+		},
 	}
 	directory, _ := s.dir.Data()
 	nextTargetID := 3
@@ -106,162 +115,214 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 		}
 		switch redirection.Op {
 		case syntax.RdrIn, syntax.RdrInOut:
-			if fd != 0 {
-				return nil, fmt.Errorf("unsupported input file descriptor %d", fd)
-			}
-			filename, err := e.redirectWord(s, redirection.Word)
+			filename, unresolved, err := e.redirectWord(s, redirection.Word)
 			if err != nil {
 				return nil, err
 			}
+			if unresolved {
+				target := &descriptorTarget{input: newUnresolved[[]byte](nil)}
+				if redirection.Op == syntax.RdrInOut {
+					target.output = &outputTarget{id: nextTargetID, external: true}
+					nextTargetID++
+				}
+				plan.descriptors[fd] = target
+				plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Unresolved: true})
+				if fd == 0 {
+					plan.stdinReplaced = true
+				}
+				continue
+			}
 			filename = s.fs.resolve(directory, filename)
+			if isExternalDevicePath(filename) {
+				target := &descriptorTarget{input: newUnresolved[[]byte](nil)}
+				if redirection.Op == syntax.RdrInOut {
+					target.output = &outputTarget{id: nextTargetID, external: true}
+					nextTargetID++
+				}
+				plan.descriptors[fd] = target
+				plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename})
+				if fd == 0 {
+					plan.stdinReplaced = true
+				}
+				continue
+			}
 			contents, unknown, exists := s.fs.readFile(filename)
 			if !exists {
-				if redirection.Op != syntax.RdrInOut {
-					if e.discoveryDepth == 0 {
-						return nil, &redirectionFailure{message: fmt.Sprintf("%s: No such file or directory", filename)}
-					}
-					plan.failureStates = append(plan.failureStates, s.snapshotForUnknownFailure())
-					if err := s.fs.writeAbstract(filename, nil, false, true); err != nil {
-						return nil, outputRedirectionError(filename, err)
-					}
-					unknown = true
-				} else if err := s.fs.write(filename, nil, false); err != nil {
-					if e.discoveryDepth == 0 || !errors.Is(err, iofs.ErrNotExist) {
-						return nil, outputRedirectionError(filename, err)
-					}
-					plan.failureStates = append(plan.failureStates, s.snapshotForUnknownFailure())
-					if err := s.fs.writeAbstract(filename, nil, false, false); err != nil {
-						return nil, outputRedirectionError(filename, err)
-					}
+				if err := s.fs.writeWithParents(filename, nil, false); err != nil {
+					return nil, outputRedirectionError(filename, err)
 				}
+				contents = nil
+				unknown = false
 			}
+			target := &descriptorTarget{inputFile: filename}
 			if unknown {
-				plan.stdin = newUnresolved(contents)
+				target.input = newUnresolved(contents)
 			} else {
-				plan.stdin = newCertain(contents)
+				target.input = newCertain(contents)
 			}
+			if redirection.Op == syntax.RdrInOut {
+				target.output = &outputTarget{id: nextTargetID, file: filename}
+				nextTargetID++
+			}
+			plan.descriptors[fd] = target
 			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename})
-			plan.stdinReplaced = true
-			plan.stdinFile = filename
-		case syntax.WordHdoc:
-			if fd != 0 {
-				return nil, fmt.Errorf("unsupported here-string file descriptor %d", fd)
+			if fd == 0 {
+				plan.stdinReplaced = true
 			}
-			value, unknown, err := e.literalValueWithCertainty(s, redirection.Word)
+		case syntax.WordHdoc:
+			value, unknown, err := e.redirectLiteralValue(s, redirection.Word)
 			if err != nil {
 				return nil, fmt.Errorf("expand here-string redirection: %w", err)
 			}
-			plan.stdin = newCertain([]byte(value + "\n"))
+			input := newCertain([]byte(value + "\n"))
 			if unknown {
-				plan.stdin = newUnresolved([]byte(value + "\n"))
+				input = newUnresolved([]byte(value + "\n"))
 			}
-			plan.stdinReplaced = true
-			plan.stdinFile = ""
+			plan.descriptors[fd] = &descriptorTarget{input: input}
+			if fd == 0 {
+				plan.stdinReplaced = true
+			}
 		case syntax.Hdoc, syntax.DashHdoc:
-			if fd != 0 {
-				return nil, fmt.Errorf("unsupported here-document file descriptor %d", fd)
-			}
-			value, unknown, err := e.literalValueWithCertainty(s, redirection.Hdoc)
+			value, unknown, err := e.redirectLiteralValue(s, redirection.Hdoc)
 			if err != nil {
 				return nil, fmt.Errorf("expand here-document: %w", err)
 			}
-			plan.stdin = newCertain([]byte(value))
+			input := newCertain([]byte(value))
 			if unknown {
-				plan.stdin = newUnresolved([]byte(value))
+				input = newUnresolved([]byte(value))
 			}
-			plan.stdinReplaced = true
-			plan.stdinFile = ""
+			plan.descriptors[fd] = &descriptorTarget{input: input}
+			if fd == 0 {
+				plan.stdinReplaced = true
+			}
 		case syntax.RdrOut, syntax.RdrClob, syntax.AppOut:
-			if fd != 1 && fd != 2 {
-				return nil, fmt.Errorf("unsupported output file descriptor %d", fd)
-			}
-			filename, err := e.redirectWord(s, redirection.Word)
+			filename, unresolved, err := e.redirectWord(s, redirection.Word)
 			if err != nil {
 				return nil, err
 			}
-			filename = s.fs.resolve(directory, filename)
-			failure, err := e.prepareOutputRedirection(s, filename, redirection.Op == syntax.AppOut)
-			if err != nil {
-				return nil, err
-			}
-			if failure != nil {
-				plan.failureStates = append(plan.failureStates, failure)
-			}
-			if redirection.Op != syntax.AppOut && filename == plan.stdinFile {
-				plan.stdin = newCertain[[]byte](nil)
-			}
-			target := outputTarget{id: nextTargetID, file: filename, append: redirection.Op == syntax.AppOut}
-			nextTargetID++
-			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename})
-			if fd == 1 {
-				plan.stdout = target
+			appendMode := redirection.Op == syntax.AppOut
+			var output *outputTarget
+			if unresolved {
+				output = &outputTarget{id: nextTargetID, external: true}
 			} else {
-				plan.stderr = target
+				filename = s.fs.resolve(directory, filename)
+				if isExternalDevicePath(filename) {
+					output = &outputTarget{id: nextTargetID, external: true}
+				} else {
+					if prepareErr := prepareOutputRedirection(s, filename, appendMode); prepareErr != nil {
+						return nil, prepareErr
+					}
+					output = &outputTarget{id: nextTargetID, file: filename, append: appendMode}
+					if !appendMode {
+						truncateDescriptorInput(plan.descriptors[0], filename)
+					}
+				}
+			}
+			nextTargetID++
+			plan.descriptors[fd] = &descriptorTarget{output: output}
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename, Unresolved: unresolved})
+			if fd == 0 {
+				plan.stdinReplaced = true
 			}
 		case syntax.DplOut:
-			if fd != 1 && fd != 2 {
-				return nil, fmt.Errorf("unsupported duplicated output file descriptor %d", fd)
-			}
-			target, err := e.redirectWord(s, redirection.Word)
+			target, unresolved, err := e.redirectWord(s, redirection.Word)
 			if err != nil {
 				return nil, err
 			}
-			var output outputTarget
-			switch target {
-			case "1":
-				output = plan.stdout
-			case "2":
-				output = plan.stderr
-			case "-":
-				output = outputTarget{id: nextTargetID, file: "/dev/null"}
+			if unresolved {
+				plan.descriptors[fd] = abstractDescriptor(nextTargetID)
 				nextTargetID++
-			default:
-				return nil, fmt.Errorf("unsupported output descriptor duplication %d>&%s", fd, target)
+				plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Unresolved: true})
+				if fd == 0 {
+					plan.stdinReplaced = true
+				}
+				continue
+			}
+			if targetFD, parseErr := strconv.Atoi(target); parseErr == nil {
+				descriptor := plan.descriptors[targetFD]
+				if descriptor == nil {
+					descriptor = abstractDescriptor(nextTargetID)
+					nextTargetID++
+				}
+				plan.descriptors[fd] = descriptor
+			} else if target == "-" {
+				plan.descriptors[fd] = &descriptorTarget{}
+			} else if redirection.N == nil && fd == 1 {
+				filename := s.fs.resolve(directory, target)
+				var output *outputTarget
+				if isExternalDevicePath(filename) {
+					output = &outputTarget{id: nextTargetID, external: true}
+				} else {
+					if prepareErr := prepareOutputRedirection(s, filename, false); prepareErr != nil {
+						return nil, prepareErr
+					}
+					output = &outputTarget{id: nextTargetID, file: filename}
+					truncateDescriptorInput(plan.descriptors[0], filename)
+				}
+				nextTargetID++
+				descriptor := &descriptorTarget{output: output}
+				plan.descriptors[1] = descriptor
+				plan.descriptors[2] = descriptor
+				target = filename
+			} else {
+				return nil, &redirectionFailure{message: fmt.Sprintf("%s: ambiguous redirect", target)}
 			}
 			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: target})
-			if fd == 1 {
-				plan.stdout = output
-			} else {
-				plan.stderr = output
+			if fd == 0 {
+				plan.stdinReplaced = true
 			}
 		case syntax.DplIn:
-			if fd != 0 {
-				return nil, fmt.Errorf("unsupported duplicated input file descriptor %d", fd)
-			}
-			target, err := e.redirectWord(s, redirection.Word)
+			target, unresolved, err := e.redirectWord(s, redirection.Word)
 			if err != nil {
 				return nil, err
 			}
-			if target != "0" && target != "-" {
-				return nil, fmt.Errorf("unsupported input descriptor duplication %d<&%s", fd, target)
+			if unresolved {
+				plan.descriptors[fd] = abstractDescriptor(nextTargetID)
+				nextTargetID++
+			} else if target == "-" {
+				plan.descriptors[fd] = &descriptorTarget{}
+			} else if targetFD, parseErr := strconv.Atoi(target); parseErr == nil {
+				descriptor := plan.descriptors[targetFD]
+				if descriptor == nil {
+					descriptor = abstractDescriptor(nextTargetID)
+					nextTargetID++
+				}
+				plan.descriptors[fd] = descriptor
+			} else {
+				return nil, &redirectionFailure{message: fmt.Sprintf("%s: ambiguous redirect", target)}
 			}
-			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: target})
-			if target == "-" {
-				plan.stdin = newCertain[[]byte](nil)
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: target, Unresolved: unresolved})
+			if fd == 0 {
 				plan.stdinReplaced = true
-				plan.stdinFile = ""
 			}
 		case syntax.RdrAll, syntax.AppAll:
-			filename, err := e.redirectWord(s, redirection.Word)
+			filename, unresolved, err := e.redirectWord(s, redirection.Word)
 			if err != nil {
 				return nil, err
 			}
-			filename = s.fs.resolve(directory, filename)
-			failure, err := e.prepareOutputRedirection(s, filename, redirection.Op == syntax.AppAll)
-			if err != nil {
-				return nil, err
+			appendMode := redirection.Op == syntax.AppAll
+			var output *outputTarget
+			if unresolved {
+				output = &outputTarget{id: nextTargetID, external: true}
+			} else {
+				filename = s.fs.resolve(directory, filename)
+				if isExternalDevicePath(filename) {
+					output = &outputTarget{id: nextTargetID, external: true}
+				} else {
+					if prepareErr := prepareOutputRedirection(s, filename, appendMode); prepareErr != nil {
+						return nil, prepareErr
+					}
+					output = &outputTarget{id: nextTargetID, file: filename, append: appendMode}
+					if !appendMode {
+						truncateDescriptorInput(plan.descriptors[0], filename)
+					}
+				}
 			}
-			if failure != nil {
-				plan.failureStates = append(plan.failureStates, failure)
-			}
-			if redirection.Op != syntax.AppAll && filename == plan.stdinFile {
-				plan.stdin = newCertain[[]byte](nil)
-			}
-			output := outputTarget{id: nextTargetID, file: filename, append: redirection.Op == syntax.AppAll}
 			nextTargetID++
-			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename})
-			plan.stdout = output
-			plan.stderr = output
+			descriptor := &descriptorTarget{output: output}
+			plan.descriptors[1] = descriptor
+			plan.descriptors[2] = descriptor
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename, Unresolved: unresolved})
 		default:
 			return nil, fmt.Errorf("unsupported redirection operator %v", redirection.Op)
 		}
@@ -269,19 +330,33 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 	return plan, nil
 }
 
-func (e *ExecutionContext) prepareOutputRedirection(s *State, filename string, appendMode bool) (*State, error) {
+func abstractDescriptor(targetID int) *descriptorTarget {
+	return &descriptorTarget{
+		input:  newUnresolved[[]byte](nil),
+		output: &outputTarget{id: targetID, external: true},
+	}
+}
+
+func truncateDescriptorInput(descriptor *descriptorTarget, filename string) {
+	if descriptor == nil || descriptor.inputFile != filename {
+		return
+	}
+	descriptor.input = newCertain[[]byte](nil)
+}
+
+func isExternalDevicePath(filename string) bool {
+	return strings.HasPrefix(filename, "/dev/tcp/") || strings.HasPrefix(filename, "/dev/udp/")
+}
+
+func prepareOutputRedirection(s *State, filename string, appendMode bool) error {
 	err := s.fs.write(filename, nil, appendMode)
-	if err == nil {
-		return nil, nil
+	if errors.Is(err, iofs.ErrNotExist) {
+		err = s.fs.writeWithParents(filename, nil, appendMode)
 	}
-	if e.discoveryDepth == 0 || !errors.Is(err, iofs.ErrNotExist) {
-		return nil, outputRedirectionError(filename, err)
+	if err != nil {
+		return outputRedirectionError(filename, err)
 	}
-	failure := s.snapshotForUnknownFailure()
-	if err := s.fs.writeAbstract(filename, nil, appendMode, false); err != nil {
-		return nil, outputRedirectionError(filename, err)
-	}
-	return failure, nil
+	return nil
 }
 
 func outputRedirectionError(filename string, err error) error {
@@ -297,18 +372,27 @@ func outputRedirectionError(filename string, err error) error {
 	}
 }
 
-func (e *ExecutionContext) redirectWord(s *State, word *syntax.Word) (string, error) {
-	words, err := e.expandWords(s, []*syntax.Word{word})
+func (e *ExecutionContext) redirectWord(s *State, word *syntax.Word) (string, bool, error) {
+	expansion, err := e.expandFields(s, []*syntax.Word{word}, true)
 	if err != nil {
-		return "", fmt.Errorf("expand redirection: %w", err)
+		return "", false, fmt.Errorf("expand redirection: %w", err)
 	}
-	if len(words) != 1 {
-		return "", fmt.Errorf("redirection expanded to %d fields", len(words))
+	if expansion.hostUnknown || wordHasUnknownData(s, word) {
+		return "", true, nil
 	}
-	if wordHasUnknownData(s, word) {
-		return "", newUnknownValueError("redirection path")
+	if len(expansion.fields) != 1 {
+		return "", false, &redirectionFailure{message: "ambiguous redirect"}
 	}
-	return words[0], nil
+	return expansion.fields[0], false, nil
+}
+
+func (e *ExecutionContext) redirectLiteralValue(s *State, word *syntax.Word) (string, bool, error) {
+	if word == nil {
+		return "", false, nil
+	}
+	certainty := wordCertainty(s, word)
+	value, err := e.expandWordValue(s, word, expand.Literal)
+	return value, certainty.hostUnknown() || certainty.dataUnknown(), err
 }
 
 func redirectFD(redirection *syntax.Redirect) (int, error) {

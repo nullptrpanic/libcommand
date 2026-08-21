@@ -47,7 +47,7 @@ func checkUntrustedRequestMaterialization(request *SimulationRequest, maximum in
 			total, ok = materialize.Add(total, size, maximum)
 		}
 	}
-	add(len(request.Source), len(request.Stdin), len(request.WorkingDir))
+	add(len(request.Source), len(request.Stdin), len(request.WorkingDir), len(request.User))
 	for _, argument := range request.Args {
 		if !ok {
 			break

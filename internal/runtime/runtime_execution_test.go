@@ -159,20 +159,10 @@ func TestDispatchBehaviorFacts(t *testing.T) {
 			t.Fatalf("Execute() error = %v", err)
 		}
 	})
-	t.Run("budget and unsupported syntax diagnose source", func(t *testing.T) {
-		for _, test := range []struct {
-			script  string
-			max     int
-			message string
-		}{
-			{`one; two`, 1, "maximum execution step count 1 reached"},
-			{`echo x 3>file`, 3, "unsupported output file descriptor 3"},
-			{`echo x 2>&3`, 3, "unsupported output descriptor duplication 2>&3"},
-		} {
-			err := Execute(context.Background(), parseForTest(t, test.script, "facts.sh"), &Request{}, &Config{MaxExecutionSteps: test.max, LookupCommand: lookupAllCommands(noOpDispatch)})
-			if err == nil || !strings.Contains(err.Error(), test.message) || !strings.Contains(err.Error(), "at 1:") {
-				t.Fatalf("Execute() error = %v", err)
-			}
+	t.Run("budget diagnostic includes source", func(t *testing.T) {
+		err := Execute(context.Background(), parseForTest(t, `one; two`, "facts.sh"), &Request{}, &Config{MaxExecutionSteps: 1, LookupCommand: lookupAllCommands(noOpDispatch)})
+		if err == nil || !strings.Contains(err.Error(), "maximum execution step count 1 reached") || !strings.Contains(err.Error(), "at 1:") {
+			t.Fatalf("Execute() error = %v", err)
 		}
 	})
 }
@@ -223,18 +213,13 @@ func TestDirectExecutorErrorPathsAndScopes(t *testing.T) {
 			t.Fatalf("paths=%#v state=%#v err=%v", paths, s, err)
 		}
 	})
-	t.Run("redirect plans reject unsupported forms", func(t *testing.T) {
-		for _, test := range []struct {
-			script  string
-			message string
-		}{
-			{`cmd <&1`, "unsupported input descriptor duplication"}, {`cmd 1<<<value`, "unsupported here-string file descriptor 1"}, {`cmd >$RANDOM`, "host runtime state"},
-		} {
+	t.Run("redirect plans model arbitrary and unresolved descriptors", func(t *testing.T) {
+		for _, script := range []string{`cmd <&1`, `cmd 1<<<value`, `cmd >$RANDOM`} {
 			e, s := newNoOpExecutor(context.Background(), 20, &Request{Env: map[string]string{"outer": "value"}})
-			file := parseForTest(t, test.script, "direct.sh")
-			_, err := e.prepareRedirections(s, file.Stmts[0].Redirs)
-			if err == nil || !strings.Contains(err.Error(), test.message) {
-				t.Fatalf("%s: %v", test.script, err)
+			file := parseForTest(t, script, "direct.sh")
+			plan, err := e.prepareRedirections(s, file.Stmts[0].Redirs)
+			if err != nil || plan == nil {
+				t.Fatalf("%s: plan=%#v err=%v", script, plan, err)
 			}
 		}
 	})
@@ -245,7 +230,7 @@ func TestDirectExecutorErrorPathsAndScopes(t *testing.T) {
 			ok      bool
 			wantErr bool
 		}{
-			{`echo "$(echo value)"`, false, false}, {`echo "$(<$RANDOM)"`, true, true},
+			{`echo "$(echo value)"`, false, false}, {`echo "$(<$RANDOM)"`, true, false},
 		} {
 			file := parseForTest(t, test.script, "direct.sh")
 			sub := firstCommandSubstitution(file.Stmts[0].Cmd)

@@ -39,10 +39,11 @@ func (e *ExecutionContext) commandInvocation(s *State, name string, args []*Argu
 	}
 	directory, directoryUnresolved := s.dir.Data()
 	_, stdinUnresolved := s.stdin.Data()
+	nameUnresolved := name == ""
 	invocation := &Invocation{Name: name, Args: invocationArguments, Dir: directory, Stdin: input}
 	if internal {
-		if stdinUnresolved || directoryUnresolved {
-			invocation.Unresolved = &InvocationUnresolved{Dir: directoryUnresolved, Stdin: stdinUnresolved}
+		if nameUnresolved || stdinUnresolved || directoryUnresolved {
+			invocation.Unresolved = &InvocationUnresolved{Name: nameUnresolved, Dir: directoryUnresolved, Stdin: stdinUnresolved}
 		}
 		if stdinUnresolved {
 			invocation.Stdin = nil
@@ -58,8 +59,9 @@ func (e *ExecutionContext) commandInvocation(s *State, name string, args []*Argu
 	for _, variable := range unresolvedEnvironment {
 		invocation.Env[variable] = ""
 	}
-	if len(unresolvedEnvironment) != 0 || stdinUnresolved || directoryUnresolved {
+	if nameUnresolved || len(unresolvedEnvironment) != 0 || stdinUnresolved || directoryUnresolved {
 		invocation.Unresolved = &InvocationUnresolved{
+			Name:  nameUnresolved,
 			Env:   unresolvedEnvironment,
 			Dir:   directoryUnresolved,
 			Stdin: stdinUnresolved,

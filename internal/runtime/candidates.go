@@ -20,7 +20,7 @@ func commandCandidateLookup(lookup CommandLookupFunc) func(string) bool {
 			return false
 		}
 		if definition.Fallback {
-			return definition.UserOverride
+			return definition.UserOverride || definition.Candidate
 		}
 		return definition.Candidate
 	}

@@ -7,6 +7,11 @@ import (
 	"mvdan.cc/sh/v3/expand"
 )
 
+// User returns the simulated current user.
+func (s *State) User() string {
+	return s.user
+}
+
 // Directory returns the current working directory. It returns an empty string
 // when the directory depends on unresolved shell state.
 func (s *State) Directory() string {

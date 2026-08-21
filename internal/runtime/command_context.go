@@ -9,16 +9,61 @@ import (
 // CommandContext provides Shell execution capabilities for one command call.
 // It and the State returned by State must not be retained after the call.
 type CommandContext struct {
-	execution *ExecutionContext
-	state     *State
-	source    *location
-	syntax    syntax.Command
-	redirects []*Redirect
+	execution    *ExecutionContext
+	state        *State
+	source       *location
+	syntax       syntax.Command
+	redirects    []*Redirect
+	originalUser string
+	userChanged  bool
 }
 
 // State returns the current execution-path state.
 func (c *CommandContext) State() *State {
 	return c.state
+}
+
+// ChangeUser changes the simulated user for the remainder of this command,
+// including nested command operations. The runtime restores the previous user
+// on every returned path when the command completes.
+func (c *CommandContext) ChangeUser(user string) error {
+	previous := c.state.user
+	if !c.userChanged {
+		c.originalUser = previous
+	}
+	c.state.user = user
+	if err := c.state.checkPublicMutationMaterialization(); err != nil {
+		c.state.user = previous
+		return err
+	}
+	c.userChanged = true
+	return nil
+}
+
+func (c *CommandContext) restoreUser(paths []*pathResult) {
+	if !c.userChanged {
+		return
+	}
+	states := make([]*State, 0, len(paths)+1)
+	states = append(states, c.state)
+	for _, path := range paths {
+		states = append(states, path.state)
+	}
+	visited := make(map[*State]struct{})
+	for len(states) != 0 {
+		last := len(states) - 1
+		state := states[last]
+		states = states[:last]
+		if state == nil {
+			continue
+		}
+		if _, exists := visited[state]; exists {
+			continue
+		}
+		visited[state] = struct{}{}
+		state.user = c.originalUser
+		states = append(states, state.exitFailure)
+	}
 }
 
 // CommandSyntax returns the parser-special command node for a direct

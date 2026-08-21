@@ -14,7 +14,7 @@ func TestSimulationRequestPublicFields(t *testing.T) {
 	for index := range fields {
 		fields[index] = typeOfRequest.Field(index).Name
 	}
-	want := []string{"Source", "Env", "Args", "Stdin", "Files", "WorkingDir"}
+	want := []string{"Source", "Env", "Args", "Stdin", "Files", "WorkingDir", "User"}
 	if !reflect.DeepEqual(fields, want) {
 		t.Fatalf("SimulationRequest fields = %#v, want %#v", fields, want)
 	}
@@ -30,6 +30,7 @@ func TestPublicCommandTypes(t *testing.T) {
 
 func TestPublicUnifiedCommandAPI(t *testing.T) {
 	var _ func(*libcommand.CommandContext, string) *libcommand.CommandResult = (*libcommand.CommandContext).StopUnresolved
+	var _ func(*libcommand.CommandContext, string) error = (*libcommand.CommandContext).ChangeUser
 
 	var command libcommand.Command = func(_ context.Context, current *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
 		return &libcommand.CommandResult{Stdout: []byte(current.State().Directory())}, nil

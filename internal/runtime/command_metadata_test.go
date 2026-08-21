@@ -34,7 +34,7 @@ func TestCandidateLookupExcludesEvaluatorOwnedControls(t *testing.T) {
 	}
 }
 
-func TestCandidateLookupIncludesOnlyUserFallback(t *testing.T) {
+func TestCandidateLookupIncludesObservableFallback(t *testing.T) {
 	command := adaptTestCommand(func(context.Context, *State, *Invocation) (*CommandResult, error) {
 		return &CommandResult{}, nil
 	})
@@ -45,6 +45,7 @@ func TestCandidateLookupIncludesOnlyUserFallback(t *testing.T) {
 	}{
 		{name: "default fallback", definition: &CommandDefinition{Command: command, Fallback: true}},
 		{name: "user fallback", definition: &CommandDefinition{Command: command, Fallback: true, UserOverride: true}, want: true},
+		{name: "middleware fallback", definition: &CommandDefinition{Command: command, Fallback: true, Candidate: true}, want: true},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			candidate := commandCandidateLookup(func(string) *CommandDefinition { return test.definition })
