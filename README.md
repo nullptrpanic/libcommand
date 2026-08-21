@@ -101,7 +101,12 @@ means immediate EOF. `SimulationRequest.Files` can preload regular files into
 the isolated virtual filesystem; relative file paths resolve against
 `WorkingDir`, and their parent directories are created automatically. An empty
 `WorkingDir` keeps the existing `/` default, while a relative value is resolved
-from `/`. The script name exposed as `$0` is `command.sh`.
+from `/`. During redirection evaluation, reading a missing file materializes a
+concrete empty file, while writing a missing file creates its required parent
+directories in the VFS. Known file/directory conflicts remain errors.
+`SimulationRequest.User` initializes the simulated current user and
+defaults to `"user"`; it does not synthesize or rewrite `USER`, `LOGNAME`,
+`HOME`, `UID`, or `EUID`. The script name exposed as `$0` is `command.sh`.
 
 ## Architecture
 
@@ -244,13 +249,17 @@ concrete value:
 
 - `ArgumentString` contains a concrete argument.
 - `ArgumentUnresolved` represents a whole argument whose value is unknown.
+- `Invocation.Unresolved.Name` reports that the expanded command name is
+  unknown; `Invocation.Name` is empty in that fallback call.
 - `Invocation.Unresolved.Env` lists unresolved exported variable names.
 - `Invocation.Unresolved.Dir` and `Invocation.Unresolved.Stdin` qualify the
   working directory and input stream.
 
-An unknown command name, dynamic source string, redirection path, or array
-index cannot be enumerated safely and produces a source-positioned unresolved
-semantics error where a concrete value is required.
+An unknown command name is dispatched through the `"*"` fallback, and an
+unknown redirection target is exposed as `Redirect.Unresolved` and modeled as
+an abstract input or output endpoint. Dynamic source strings and array indexes
+still produce a source-positioned unresolved semantics error where a concrete
+value is required.
 
 ## Command dispatch and override rules
 
@@ -297,6 +306,12 @@ outermost wrapper: `A before -> B before -> command -> B after -> A after`.
 Shell functions and evaluator-owned control transfers are not registry commands
 and therefore do not enter this chain.
 
+Registering middleware makes every command call an observable reachability
+candidate. When an unknown condition or host-dependent control operation would
+otherwise hide a call, the simulator retains the ordinary path and adds an
+abstract possible path through the middleware. Deterministic syntax or
+expansion errors that prevent construction of an invocation are still errors.
+
 ```go
 builder.Middleware(func(next libcommand.Command) libcommand.Command {
 	return func(
@@ -326,7 +341,16 @@ in-process helpers:
 | Declarations | `declare`, `local`, `export`, `readonly`, `typeset`, `let` |
 | Conditions and traps | `test`, `[`, `trap`, `type` |
 | Dispatch and dynamic execution | `command`, `builtin`, `env`, `exec`, `eval`, `source`, `.`, `bash`, `sh` |
+| External execution wrappers | `sudo`, `setsid`, `nohup`, `timeout`, `nice`, `stdbuf`, `taskset`, `ionice`, `chrt` |
 | Simulated utilities | integer `seq`, stdin-based `base64`, and line-based `rev` |
+
+Execution wrappers parse their supported command-line forms and redispatch the
+nested executable through the same registry and middleware chain. They do not
+emulate operating-system scheduling, sessions, credentials, signals, or
+timeouts. `sudo` changes the simulated user to `root` by default, or to the
+value selected by `-u`/`--user`, only while its nested operation runs; every
+resulting path is restored to the caller's user afterward. Caller registrations
+can replace any of these defaults.
 
 ## Nested and dynamic Shell execution
 
@@ -396,9 +420,12 @@ Every command receives a read-only `Invocation` and a call-scoped
 runtime path construction:
 
 - `Directory` and `ChangeDirectory`
+- `User`, plus command-scoped `CommandContext.ChangeUser`; a changed user is
+  inherited by nested declarative execution and restored on every returned path
 - `Variable`, `SetVariable`, and `UnsetVariable`
-- `Redirects`, containing the concrete expanded targets and operators active
-  for the call; virtual file targets are absolute paths
+- `Redirects`, containing the expanded targets and operators active for the
+  call; virtual file targets are absolute paths and unknown targets set
+  `Redirect.Unresolved`
 - virtual filesystem, input, option, lookup, arithmetic, and nested-execution
   operations exposed by `CommandContext`
 
@@ -440,11 +467,18 @@ if errors.Is(err, analysis.ErrRiskDetected) {
 }
 ```
 
-Available handlers cover `rm`, common power-control commands, and
-`nc`/`ncat`/`netcat`/`socat`. Each selected handler also inspects concrete
-expanded `/dev/tcp` and `/dev/udp` redirections. A detection is returned as
-`*analysis.DetectionError` and is propagated by `Simulate`; inconclusive or
-unresolved input is treated as safe and retains unresolved-command behavior.
+Available handlers cover root-level removal through `rm` or `find`, common
+power-control commands, block-device writes through `mkfs*`, `wipefs`, or
+`dd`, netcat or `socat` modes that attach a network channel to a Shell,
+interactive Shells whose input is connected to a concrete `/dev/tcp` or
+`/dev/udp` endpoint, and high-confidence Python or Perl socket payloads that
+attach process streams and launch a Shell. Ordinary file writes, standalone
+network clients or redirections, local interpreter programs, and local
+Shell pipelines are intentionally not classified as risks. A detection is returned as
+`*analysis.DetectionError`, whose `Type` is one of `reverse_shell`,
+`destructive_operation`, `sensitive_information_disclosure`, or
+`data_exfiltration`, and is propagated by `Simulate`. Inconclusive or unresolved
+input is treated as safe and retains unresolved-command behavior.
 Registration uses exact expanded command names, so `/bin/rm` must be
 registered separately if required. Nested decoded source still returns
 through normal dispatch: registering only `analysis.RM` detects `rm -rf /`
@@ -462,7 +496,7 @@ Each simulation has two independent default limits:
 ```mermaid
 flowchart TB
     Limit["MaxMemoryBytes"]
-    Request["Source · Env · Args · Stdin"]
+    Request["Source · Env · Args · Stdin<br/>Files · WorkingDir · User"]
     Syntax["Initial and dynamic ASTs<br/>candidate index"]
     States["All retained path states"]
     Data["Variables · streams · scopes · traps<br/>substitutions · collections"]
@@ -570,12 +604,13 @@ The supported subset focuses on common orchestration scripts:
   arithmetic `for`, `while`, and `until`;
 - functions, subshells, command substitutions, pipelines, background
   commands, and `wait` without job operands;
-- virtual files, here-documents, here-strings, common redirections, and process
+- virtual files, here-documents, here-strings, numeric file-descriptor
+  redirections, abstract `/dev/tcp` and `/dev/udp` endpoints, and process
   substitutions;
 - `test`, `[`, supported `[[` expressions, declarations, options, traps,
   input builtins, loop control, and function returns; and
 - `command`, `builtin`, `env`, `exec`, `eval`, virtual-file `source`, and
-  common `bash -c` or `sh` forms.
+  common `bash` or `sh` forms including parse-only and interactive options.
 
 Support is behavior-specific rather than name-only. Unsupported options and
 semantics return errors or unresolved outcomes instead of silently invoking a
@@ -584,15 +619,17 @@ host implementation.
 ## Known limitations
 
 - Arbitrary Bash compatibility is not guaranteed. Uncommon builtins, options,
-  coprocess forms, job operands, file descriptors, and redirection forms may
-  be unsupported.
+  coprocess forms, job operands, named file-descriptor allocation, and unusual
+  redirection forms may be unsupported.
 - Commands embedded in Python or another non-Bash language are opaque to the
   Bash parser.
 - Command stdout and stderr are aggregate streams. Byte-level interleaving and
   independent file-descriptor offsets cannot be reconstructed.
 - The virtual filesystem never reads the host filesystem. It starts with the
   regular files explicitly provided through `SimulationRequest.Files`, or
-  empty at `/` when no files are provided.
+  empty at `/` when no files are provided. Missing redirection files use the
+  fail-open VFS behavior described above; this does not imply that a
+  corresponding host file exists or is empty.
 - Host-dependent identity, process, and randomness values are unresolved or
   rejected when a concrete value is required.
 - Unknown strings, field counts, and loop lengths are not exhaustively

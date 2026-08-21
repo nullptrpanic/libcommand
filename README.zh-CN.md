@@ -91,7 +91,13 @@ func main() {
 }
 ```
 
-`SimulationRequest.Stdin` 是有限的具体输入流。nil 或空切片都表示立即 EOF。
+`SimulationRequest.Stdin` 是有限的具体输入流，nil 或空切片都表示立即 EOF。
+`SimulationRequest.Files` 可向隔离的虚拟文件系统预置普通文件，相对路径按
+`WorkingDir` 解析并自动创建所需父目录。处理重定向时，读取缺失文件会在 VFS 中
+将其物化为确定的空文件；写入缺失文件会自动创建所需父目录。已知的文件与目录
+冲突仍然返回错误。`User` 初始化模拟的当前用户，空值默认
+为 `"user"`；它不会自动生成
+或改写 `USER`、`LOGNAME`、`HOME`、`UID`、`EUID`。
 脚本中暴露的 `$0` 固定为 `command.sh`。
 
 ## 架构
@@ -229,12 +235,15 @@ flowchart TD
 
 - `ArgumentString` 保存具体参数；
 - `ArgumentUnresolved` 表示整个参数的值无法确定；
+- `Invocation.Unresolved.Name` 表示展开后的命令名无法确定，此时 fallback
+  调用中的 `Invocation.Name` 为空；
 - `Invocation.Unresolved.Env` 列出值无法确定的已导出变量名；
 - `Invocation.Unresolved.Dir` 和 `Invocation.Unresolved.Stdin` 分别标记工作
   目录和输入流是否无法确定。
 
-未知命令名、动态源码、重定向路径或数组索引无法被安全枚举；当语义必须使用
-具体值时，模拟器会返回带源码位置的 unresolved semantics 错误。
+未知命令名会交给 `"*"` fallback；未知重定向目标通过 `Redirect.Unresolved`
+暴露，并建模为抽象输入或输出端点。动态源码和数组索引仍会在必须使用具体值时
+返回带源码位置的 unresolved semantics 错误。
 
 ## 命令分发与覆盖规则
 
@@ -278,6 +287,11 @@ Middleware 位于最外层，执行顺序为
 `A before -> B before -> command -> B after -> A after`。Shell 函数和由执行器
 管理的控制转移不属于命令注册表，因此不会进入这条链。
 
+注册 Middleware 后，每个命令调用都会成为需要保留的可观察候选。如果未知条件或
+依赖宿主机状态的控制操作原本会遮蔽某次调用，模拟器会保留正常路径，同时增加一条
+经过 Middleware 的抽象可能路径。无法构造 Invocation 的确定性语法或展开错误仍然
+按错误处理。
+
 ```go
 builder.Middleware(func(next libcommand.Command) libcommand.Command {
 	return func(
@@ -304,7 +318,13 @@ builder.Middleware(func(next libcommand.Command) libcommand.Command {
 | 声明 | `declare`, `local`, `export`, `readonly`, `typeset`, `let` |
 | 条件与 Trap | `test`, `[`, `trap`, `type` |
 | 分发与动态执行 | `command`, `builtin`, `env`, `exec`, `eval`, `source`, `.`, `bash`, `sh` |
+| 外部执行 Wrapper | `sudo`, `setsid`, `nohup`, `timeout`, `nice`, `stdbuf`, `taskset`, `ionice`, `chrt` |
 | 模拟工具 | 整数 `seq`、基于 stdin 的 `base64` 和逐行 `rev` |
+
+执行 Wrapper 会解析受支持的命令行形式，并把内层可执行命令重新交给同一注册表
+和 Middleware 链；它们不会模拟操作系统调度、会话、凭据、信号或真实超时。
+`sudo` 默认在内层操作期间把模拟用户改为 `root`，也支持 `-u`/`--user` 指定用户；
+内层产生的每条结果路径返回后都会恢复调用方用户。调用方可以覆盖这些默认实现。
 
 ## 嵌套与动态 Shell 执行
 
@@ -372,9 +392,11 @@ builder.Command("evaluate", func(
 的路径构造：
 
 - `Directory` 和 `ChangeDirectory`；
+- `User`，以及命令作用域的 `CommandContext.ChangeUser`；改变后的用户会被嵌套的
+  声明式执行继承，并在所有返回路径上恢复；
 - `Variable`、`SetVariable` 和 `UnsetVariable`；
-- `Redirects`，包含当前调用已展开为具体值的重定向目标和操作符；虚拟文件目标
-  为绝对路径；
+- `Redirects`，包含当前调用的重定向目标和操作符；虚拟文件目标为绝对路径，
+  未知目标会设置 `Redirect.Unresolved`；
 - `CommandContext` 暴露的虚拟文件系统、输入、选项、查找、算术和嵌套执行操作。
 
 状态变更只作用于当前路径，采用 Copy-on-Write，并受逻辑物化预算检查。命令返回
@@ -413,10 +435,15 @@ if errors.Is(err, analysis.ErrRiskDetected) {
 }
 ```
 
-目前提供 `rm`、常见电源控制命令以及 `nc`/`ncat`/`netcat`/`socat` Handler；每个
-被选中的 Handler 也会检查已经展开为具体值的 `/dev/tcp`、`/dev/udp` 重定向。
-命中时返回 `*analysis.DetectionError`，并由 `Simulate` 原样向上游传递；无法确定或
-包含 unresolved 数据时按安全处理，并保留 unresolved-command 行为。注册名按照
+目前提供 `rm`/`find` 根目录级删除、常见电源控制命令、`mkfs*`/`wipefs`/`dd`
+块设备写入、把网络通道连接到 Shell 的 netcat 或 `socat` 模式、输入连接到具体
+`/dev/tcp` 或 `/dev/udp` 端点的交互式 Shell，以及同时建立 Socket、接管进程流并
+启动 Shell 的高置信 Python 或 Perl Payload；普通文件写入、单独的网络客户端或
+网络重定向、本地解释器程序和本地 Shell 管道不会被归类为风险。命中时返回
+`*analysis.DetectionError`，其 `Type` 为
+`reverse_shell`、`destructive_operation`、`sensitive_information_disclosure` 或
+`data_exfiltration`，并由 `Simulate` 原样向上游传递；无法确定或包含 unresolved
+数据时按安全处理，并保留 unresolved-command 行为。注册名按照
 展开后的命令名精确匹配，如需检测 `/bin/rm`，调用方应另外注册该名字。嵌套 Shell
 仍会通过正常分发递归检测：只注册 `analysis.RM`，也能检出
 `base64 -d | sh` 解出的 `rm -rf /`。
@@ -433,7 +460,7 @@ if errors.Is(err, analysis.ErrRiskDetected) {
 ```mermaid
 flowchart TB
     Limit["MaxMemoryBytes"]
-    Request["Source · Env · Args · Stdin"]
+    Request["Source · Env · Args · Stdin<br/>Files · WorkingDir · User"]
     Syntax["初始与动态 AST<br/>候选命令索引"]
     States["全部保留路径状态"]
     Data["变量 · 流 · 作用域 · Trap<br/>命令替换 · 集合"]
@@ -529,11 +556,12 @@ make playground
 - 顺序语句、`if`、`case`、`&&`、`||`、取反、Word/Arithmetic `for`、
   `while` 和 `until`；
 - 函数、Subshell、命令替换、管道、后台命令，以及不带 Job Operand 的 `wait`；
-- 虚拟文件、Here Document、Here String、常用重定向和 Process Substitution；
+- 虚拟文件、Here Document、Here String、数字 File Descriptor 重定向、抽象
+  `/dev/tcp` 和 `/dev/udp` 端点，以及 Process Substitution；
 - `test`、`[`、受支持的 `[[` 表达式、声明、选项、Trap、输入 Builtin、循环控制
   和函数返回；
 - `command`、`builtin`、`env`、`exec`、`eval`、基于虚拟文件的 `source`，
-  以及常见的 `bash -c` 或 `sh` 形式。
+  以及包含仅解析和交互选项在内的常见 `bash` 或 `sh` 形式。
 
 支持范围取决于具体行为，而不只是命令名。未支持的选项和语义会返回错误或
 unresolved 结果，不会静默调用宿主机实现。
@@ -541,10 +569,11 @@ unresolved 结果，不会静默调用宿主机实现。
 ## 已知限制
 
 - 不保证任意 Bash 兼容性；少见 Builtin、选项、Coprocess、Job Operand、
-  File Descriptor 和重定向形式可能不受支持。
+  命名 File Descriptor 分配和特殊重定向形式可能不受支持。
 - 嵌入 Python 或其他非 Bash 语言中的命令对 Bash 解析器不可见。
 - 命令 stdout 和 stderr 是聚合流，无法重建字节级交错顺序和独立 FD Offset。
-- 虚拟文件系统从空的 `/` 开始，永远不会读取宿主机文件系统。
+- 虚拟文件系统从空的 `/` 开始，永远不会读取宿主机文件系统。缺失的重定向文件
+  采用上述 fail-open VFS 语义，但这不表示宿主机上对应文件真实存在或内容为空。
 - 与宿主机身份、进程和随机数相关的值会被标为 unresolved；必须使用具体值时
   则返回错误。
 - 未知字符串、字段数量和循环长度不会被穷举；执行器使用类型化未知值和代表性路径。

@@ -127,10 +127,15 @@ calls all pass through analysis without separate wrapping. Analysis results are
 discarded; a classified risk error is recorded without stopping the simulation,
 and the selected command's result or error remains authoritative. Detected AST
 nodes and the matching Runtime occurrences are outlined in red, and selecting
-one shows the full detection error in the inspector. The default registry
-covers destructive root removal, system power commands, executable netcat
-variants, `socat` execution addresses, and expanded `/dev/tcp` or `/dev/udp`
-redirections for those commands.
+one shows its stable risk `Type` and full detection error in the inspector. The default registry
+covers destructive root removal through `rm` or `find`, system power commands,
+block-device writes through `mkfs*`, `wipefs`, or `dd`, executable netcat
+or `socat` modes that attach a network channel to a Shell, interactive Shells
+whose input is connected to a concrete `/dev/tcp` or `/dev/udp` endpoint, and
+high-confidence Python or Perl socket payloads that attach process streams and
+launch a Shell. Ordinary file writes, standalone network clients or
+redirections, local interpreter programs, and local Shell pipelines are
+intentionally not classified as risks.
 
 JavaScript handlers run only inside the same disposable browser Worker as the
 WebAssembly simulator. They cannot execute a server or host command, and the

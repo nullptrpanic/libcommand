@@ -106,8 +106,11 @@ Playground 会把命令检测注册表安装为一层 Builder Middleware，因�
 用户 Handler 和 fallback 都会进入分析，无需分别包装。检测返回值会被丢弃；分类为
 风险的错误只用于记录，不会中断模拟，最终结果或错误仍以实际选中的命令为准。命中
 的 AST 节点和对应 Runtime occurrence 会显示红色边框，选中节点即可在检查器中查看
-完整检测错误。默认注册表覆盖根目录递归删除、系统关机或重启、可执行程序的 netcat
-变体、`socat` 执行地址，以及这些命令上展开后的 `/dev/tcp` 或 `/dev/udp` 重定向。
+稳定的风险 `Type` 和完整检测错误。默认注册表覆盖 `rm`/`find` 根目录级删除、系统关机或重启、
+`mkfs*`/`wipefs`/`dd` 块设备写入、把网络通道连接到 Shell 的 netcat 或 `socat`
+模式、输入连接到具体 `/dev/tcp` 或 `/dev/udp` 端点的交互式 Shell，以及同时建立
+Socket、接管进程流并启动 Shell 的高置信 Python 或 Perl Payload；普通文件写入、
+单独的网络客户端或网络重定向、本地解释器程序和本地 Shell 管道不会被归类为风险。
 
 JavaScript Handler 只会在运行 WebAssembly 模拟器的同一个一次性浏览器 Worker
 中执行。它不能执行 Server 或宿主机命令；浏览器超时会通过替换 Worker 终止无限
