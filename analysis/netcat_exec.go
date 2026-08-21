@@ -8,13 +8,22 @@ import (
 )
 
 func netcatCommand(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
-	return argumentRiskResult(ctx, shell, invocation, netcatExecRisk, "network utility executes a local program")
+	return argumentRiskResult(ctx, shell, invocation, netcatExecRisk, RiskTypeReverseShell)
 }
 
 func netcatExecRisk(arguments []string) bool {
-	for _, argument := range arguments {
-		if argument == "-e" || argument == "-c" || argument == "--exec" || argument == "--sh-exec" || strings.HasPrefix(argument, "--exec=") || strings.HasPrefix(argument, "--sh-exec=") {
+	for index, argument := range arguments {
+		switch {
+		case argument == "--sh-exec" || strings.HasPrefix(argument, "--sh-exec="):
 			return true
+		case argument == "-e" || argument == "-c" || argument == "--exec":
+			if index+1 < len(arguments) && containsShellExecutable(arguments[index+1]) {
+				return true
+			}
+		case strings.HasPrefix(argument, "--exec="):
+			if containsShellExecutable(strings.TrimPrefix(argument, "--exec=")) {
+				return true
+			}
 		}
 	}
 	return false

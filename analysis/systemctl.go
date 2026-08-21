@@ -8,7 +8,7 @@ import (
 
 // Systemctl detects systemctl power-control actions.
 func Systemctl(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
-	return argumentRiskResult(ctx, shell, invocation, systemctlPowerAction, "system power control")
+	return argumentRiskResult(ctx, shell, invocation, systemctlPowerAction, RiskTypeDestructiveOperation)
 }
 
 func systemctlPowerAction(arguments []string) bool {

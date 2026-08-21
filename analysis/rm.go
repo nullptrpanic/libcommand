@@ -11,14 +11,14 @@ import (
 // RM detects recursive removal of the filesystem root.
 func RM(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
 	arguments, concrete := concreteArguments(invocation.Args)
-	reason := ""
-	if concrete && recursiveRootRemoval(arguments, invocation.Dir) {
-		reason = "recursive removal of the filesystem root"
+	riskType := RiskType("")
+	if concrete && recursiveRootRemoval(arguments, invocation.Dir, directoryUnresolved(invocation)) {
+		riskType = RiskTypeDestructiveOperation
 	}
-	return commandResult(ctx, shell, invocation, reason)
+	return commandResult(ctx, shell, invocation, riskType)
 }
 
-func recursiveRootRemoval(arguments []string, directory string) bool {
+func recursiveRootRemoval(arguments []string, directory string, directoryUnknown bool) bool {
 	recursive := false
 	options := true
 	var targets []string
@@ -45,11 +45,10 @@ func recursiveRootRemoval(arguments []string, directory string) bool {
 		return false
 	}
 	for _, target := range targets {
-		resolved := target
-		if !path.IsAbs(resolved) {
-			resolved = path.Join(directory, resolved)
+		resolved, known := resolvedPath(directory, target, directoryUnknown)
+		if !known {
+			continue
 		}
-		resolved = path.Clean(resolved)
 		if resolved == "/" || rootGlob(resolved) {
 			return true
 		}

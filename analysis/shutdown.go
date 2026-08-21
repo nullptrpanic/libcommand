@@ -8,7 +8,7 @@ import (
 
 // Shutdown detects shutdown requests while allowing cancellation commands.
 func Shutdown(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
-	return argumentRiskResult(ctx, shell, invocation, shutdownRequest, "system power control")
+	return argumentRiskResult(ctx, shell, invocation, shutdownRequest, RiskTypeDestructiveOperation)
 }
 
 func shutdownRequest(arguments []string) bool {

@@ -3,24 +3,16 @@ package analysis
 import (
 	"context"
 	"path"
-	"strings"
 
 	"github.com/nullptrpanic/libcommand"
 )
 
-func commandResult(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation, reason string) (*libcommand.CommandResult, error) {
+func commandResult(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation, riskType RiskType) (*libcommand.CommandResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	for _, redirect := range shell.Redirects() {
-		target := path.Clean(redirect.Target)
-		if strings.HasPrefix(target, "/dev/tcp/") || strings.HasPrefix(target, "/dev/udp/") {
-			reason = "network device redirection"
-			break
-		}
-	}
-	if reason != "" {
-		return nil, &DetectionError{Command: invocation.Name, Reason: reason}
+	if riskType != "" {
+		return nil, &DetectionError{Command: invocation.Name, Type: riskType}
 	}
 	return &libcommand.CommandResult{Unresolved: true}, nil
 }
@@ -30,13 +22,13 @@ func argumentRiskResult(
 	shell *libcommand.CommandContext,
 	invocation *libcommand.Invocation,
 	risky func([]string) bool,
-	reason string,
+	riskType RiskType,
 ) (*libcommand.CommandResult, error) {
 	arguments, concrete := concreteArguments(invocation.Args)
 	if !concrete || !risky(arguments) {
-		reason = ""
+		riskType = ""
 	}
-	return commandResult(ctx, shell, invocation, reason)
+	return commandResult(ctx, shell, invocation, riskType)
 }
 
 func concreteArguments(arguments []*libcommand.Argument) ([]string, bool) {
@@ -48,4 +40,18 @@ func concreteArguments(arguments []*libcommand.Argument) ([]string, bool) {
 		values[index] = argument.Value
 	}
 	return values, true
+}
+
+func resolvedPath(directory, name string, directoryUnknown bool) (string, bool) {
+	if path.IsAbs(name) {
+		return path.Clean(name), true
+	}
+	if directoryUnknown {
+		return "", false
+	}
+	return path.Join(directory, name), true
+}
+
+func directoryUnresolved(invocation *libcommand.Invocation) bool {
+	return invocation.Unresolved != nil && invocation.Unresolved.Dir
 }

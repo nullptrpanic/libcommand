@@ -8,5 +8,5 @@ import (
 
 // Poweroff detects system power-off requests.
 func Poweroff(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
-	return commandResult(ctx, shell, invocation, "system power control")
+	return commandResult(ctx, shell, invocation, RiskTypeDestructiveOperation)
 }
