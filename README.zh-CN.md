@@ -94,8 +94,9 @@ func main() {
 `SimulationRequest.Stdin` 是有限的具体输入流，nil 或空切片都表示立即 EOF。
 `SimulationRequest.Files` 可向隔离的虚拟文件系统预置普通文件，相对路径按
 `WorkingDir` 解析并自动创建所需父目录。处理重定向时，读取缺失文件会在 VFS 中
-将其物化为确定的空文件；写入缺失文件会自动创建所需父目录。已知的文件与目录
-冲突仍然返回错误。`User` 初始化模拟的当前用户，空值默认
+将其物化为确定的空文件；写入缺失文件会自动创建所需父目录。`cat` 读取缺失的
+文件操作数时，则将 stdout、stderr 和退出状态标记为 unresolved。已知的文件与
+目录冲突仍然返回错误。`User` 初始化模拟的当前用户，空值默认
 为 `"user"`；它不会自动生成
 或改写 `USER`、`LOGNAME`、`HOME`、`UID`、`EUID`。
 脚本中暴露的 `$0` 固定为 `command.sh`。
@@ -319,7 +320,10 @@ builder.Middleware(func(next libcommand.Command) libcommand.Command {
 | 条件与 Trap | `test`, `[`, `trap`, `type` |
 | 分发与动态执行 | `command`, `builtin`, `env`, `exec`, `eval`, `source`, `.`, `bash`, `sh` |
 | 外部执行 Wrapper | `sudo`, `setsid`, `nohup`, `timeout`, `nice`, `stdbuf`, `taskset`, `ionice`, `chrt` |
-| 模拟工具 | 整数 `seq`、基于 stdin 的 `base64` 和逐行 `rev` |
+| 模拟工具 | 基于虚拟文件的 `cat` 和 `rm`、整数 `seq`、基于 stdin 的 `base64` 和逐行 `rev` |
+
+`cat` 和 `rm` 只访问隔离的虚拟文件系统，绝不会读取或修改宿主文件；调用方注册
+可以覆盖任意默认命令。
 
 执行 Wrapper 会解析受支持的命令行形式，并把内层可执行命令重新交给同一注册表
 和 Middleware 链；它们不会模拟操作系统调度、会话、凭据、信号或真实超时。
@@ -394,13 +398,16 @@ builder.Command("evaluate", func(
 - `Directory` 和 `ChangeDirectory`；
 - `User`，以及命令作用域的 `CommandContext.ChangeUser`；改变后的用户会被嵌套的
   声明式执行继承，并在所有返回路径上恢复；
+- `PathID` 和 `Parent`，分别表示当前执行路径 ID 及其分叉来源的冻结状态快照；
+  Trace 上报同一组 ID；
 - `Variable`、`SetVariable` 和 `UnsetVariable`；
 - `Redirects`，包含当前调用的重定向目标和操作符；虚拟文件目标为绝对路径，
   未知目标会设置 `Redirect.Unresolved`；
 - `CommandContext` 暴露的虚拟文件系统、输入、选项、查找、算术和嵌套执行操作。
 
-状态变更只作用于当前路径，采用 Copy-on-Write，并受逻辑物化预算检查。命令返回
-后不得继续持有 `CommandContext` 或 `State` 指针。`Input` 和 `ConsumeInput`
+状态变更只作用于当前路径，采用 Copy-on-Write，并受逻辑物化预算检查。父状态快照
+不可修改，其保留状态也计入该预算。命令返回后不得继续持有 `CommandContext` 或
+`State` 指针。`Input` 和 `ConsumeInput`
 返回的字节切片归调用方所有，`SetInput` 也会复制传入数据，因此命令无法通过共享
 缓冲区修改其他保留路径。
 
@@ -409,7 +416,7 @@ builder.Command("evaluate", func(
 | 返回值 | 含义 |
 | --- | --- |
 | 非 nil Result，nil Error | 应用 stdout、stderr、退出码、Action 或声明式操作。 |
-| `&CommandResult{Unresolved: true}`，nil Error | 输出流和退出状态均无法确定。 |
+| `command.UnresolvedResult()`，nil Error | 输出流和退出状态均无法确定。 |
 | nil Result，nil Error | 放弃处理本次调用，使用 unresolved-command 行为。 |
 | 非 nil Error | 中止模拟并透传错误。 |
 | `CommandStop` | 成功终止全部活动和待执行路径。 |
@@ -427,6 +434,7 @@ simulator := libcommand.NewBuilder().
 	Command("rm", analysis.RM).
 	Command("poweroff", analysis.Poweroff).
 	Command("nc", analysis.NC).
+	Command("curl", analysis.Curl).
 	Build()
 
 err := simulator.Simulate(ctx, request)
@@ -438,15 +446,18 @@ if errors.Is(err, analysis.ErrRiskDetected) {
 目前提供 `rm`/`find` 根目录级删除、常见电源控制命令、`mkfs*`/`wipefs`/`dd`
 块设备写入、把网络通道连接到 Shell 的 netcat 或 `socat` 模式、输入连接到具体
 `/dev/tcp` 或 `/dev/udp` 端点的交互式 Shell，以及同时建立 Socket、接管进程流并
-启动 Shell 的高置信 Python 或 Perl Payload；普通文件写入、单独的网络客户端或
-网络重定向、本地解释器程序和本地 Shell 管道不会被归类为风险。命中时返回
+启动 Shell 的高置信 Python 或 Perl Payload。`Curl` 会识别通过上传、Data、JSON
+或 Multipart Form 选项读取本地文件或 stdin 的上传；普通请求、下载和内联请求数据
+不会命中。普通文件写入、其他单独的网络客户端或网络重定向、本地解释器程序和
+本地 Shell 管道不会被归类为风险。命中时返回
 `*analysis.DetectionError`，其 `Type` 为
 `reverse_shell`、`destructive_operation`、`sensitive_information_disclosure` 或
 `data_exfiltration`，并由 `Simulate` 原样向上游传递；无法确定或包含 unresolved
-数据时按安全处理，并保留 unresolved-command 行为。注册名按照
-展开后的命令名精确匹配，如需检测 `/bin/rm`，调用方应另外注册该名字。嵌套 Shell
-仍会通过正常分发递归检测：只注册 `analysis.RM`，也能检出
-`base64 -d | sh` 解出的 `rm -rf /`。
+数据时按安全处理，并保留 unresolved-command 行为。直接注册按照展开后的命令名
+精确匹配，如需检测 `/bin/rm`，调用方应另外注册该名字。需要启用完整检测集合的
+Middleware 可以调用 `analysis.Lookup(invocation.Name)`；它通过同一注册表解析可执行
+路径、`mkfs.*` 和带版本号的 Python 名称。嵌套 Shell 仍会通过正常分发递归检测：
+只注册 `analysis.RM`，也能检出 `base64 -d | sh` 解出的 `rm -rf /`。
 
 ## 资源模型
 

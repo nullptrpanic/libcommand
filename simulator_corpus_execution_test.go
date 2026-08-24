@@ -10,11 +10,11 @@ func TestSimulatorContinuesAfterUnresolvedCommandName(t *testing.T) {
 	unresolvedNames := 0
 	afterCalls := 0
 	simulator := NewBuilder().
-		Command("*", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("*", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			if invocation.Unresolved != nil && invocation.Unresolved.Name {
 				unresolvedNames++
 			}
-			return &CommandResult{Unresolved: true}, nil
+			return command.UnresolvedResult(), nil
 		}).
 		Command("record", func(_ context.Context, _ *CommandContext, _ *Invocation) (*CommandResult, error) {
 			afterCalls++

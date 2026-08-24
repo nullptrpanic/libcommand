@@ -6,6 +6,7 @@ import (
 	iofs "io/fs"
 	"path"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/nullptrpanic/libcommand/internal/materialize"
@@ -214,6 +215,82 @@ func (fs *memoryFS) ensureDir(name string) error {
 	}
 	fs.materializedBytes = resultBytes
 	return nil
+}
+
+func (fs *memoryFS) remove(ctx context.Context, name string, recursive bool) error {
+	name = path.Clean(name)
+	switch fs.pathKind(name) {
+	case PathMissing:
+		return nil
+	case PathDevice:
+		return nil
+	case PathFile:
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		removedBytes := materialize.EntryBytes + len(name) + len(fs.files[name])
+		if fs.fileUnknown(name) {
+			removedBytes += materialize.EntryBytes + len(name)
+		}
+		fs.ensureMutable()
+		delete(fs.files, name)
+		delete(fs.unknownFiles, name)
+		fs.materializedBytes -= removedBytes
+		return nil
+	case PathDirectory:
+		if !recursive {
+			return &iofs.PathError{Op: "remove", Path: name, Err: errIsDirectory}
+		}
+	}
+
+	files := make([]string, 0)
+	directories := make([]string, 0)
+	removedBytes := 0
+	iteration := 0
+	for filename, contents := range fs.files {
+		if iteration%256 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		iteration++
+		if !pathWithin(filename, name) {
+			continue
+		}
+		files = append(files, filename)
+		removedBytes += materialize.EntryBytes + len(filename) + len(contents)
+		if fs.fileUnknown(filename) {
+			removedBytes += materialize.EntryBytes + len(filename)
+		}
+	}
+	for directory := range fs.dirs {
+		if iteration%256 == 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+		}
+		iteration++
+		if directory == "/" || !pathWithin(directory, name) {
+			continue
+		}
+		directories = append(directories, directory)
+		removedBytes += materialize.EntryBytes + len(directory)
+	}
+
+	fs.ensureMutable()
+	for _, filename := range files {
+		delete(fs.files, filename)
+		delete(fs.unknownFiles, filename)
+	}
+	for _, directory := range directories {
+		delete(fs.dirs, directory)
+	}
+	fs.materializedBytes -= removedBytes
+	return nil
+}
+
+func pathWithin(name, root string) bool {
+	return root == "/" || name == root || strings.HasPrefix(name, root+"/")
 }
 
 func (fs *memoryFS) missingDirectories(name string) ([]string, int, error) {

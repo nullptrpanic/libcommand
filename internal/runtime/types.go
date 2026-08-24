@@ -81,18 +81,29 @@ const (
 // Returning it transfers ownership of Stdout and Stderr to the runtime; the
 // command must not mutate either slice after returning.
 type CommandResult struct {
-	Stdout   []byte
-	Stderr   []byte
-	ExitCode int
-	Action   CommandAction
-	// Unresolved reports that stdout, stderr, and exit status cannot be
-	// determined. The other public fields must retain their zero values.
-	Unresolved    bool
+	Stdout        []byte
+	Stderr        []byte
+	ExitCode      int
+	Action        CommandAction
 	operation     *commandOperation
 	stdoutUnknown bool
 	stderrUnknown bool
 	exitUnknown   bool
 	preserveExit  bool
+}
+
+// AllUnresolved reports whether stdout, stderr, and exit status are all
+// unresolved. Partially unresolved results return false.
+func (r *CommandResult) AllUnresolved() bool {
+	return r != nil && r.stdoutUnknown && r.stderrUnknown && r.exitUnknown
+}
+
+// NewUnresolvedResult returns a result with no representative output or exit
+// status and all three result dimensions marked unresolved. It is exported
+// only for builtin implementations in the sibling internal package; public
+// commands should use CommandContext.UnresolvedResult.
+func NewUnresolvedResult() *CommandResult {
+	return &CommandResult{stdoutUnknown: true, stderrUnknown: true, exitUnknown: true}
 }
 
 // Command executes one command through the active simulation. Runtime path

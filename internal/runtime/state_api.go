@@ -1,11 +1,26 @@
 package runtime
 
 import (
+	"errors"
 	"path"
 
 	"github.com/nullptrpanic/libcommand/internal/materialize"
 	"mvdan.cc/sh/v3/expand"
 )
+
+var errFrozenState = errors.New("parent state is immutable")
+
+// PathID returns the nonzero execution-path identity. IDs are unique within
+// one simulation.
+func (s *State) PathID() uint64 {
+	return s.pathID
+}
+
+// Parent returns the frozen state from which this path forked. The root path
+// returns nil.
+func (s *State) Parent() *State {
+	return s.parent
+}
 
 // User returns the simulated current user.
 func (s *State) User() string {
@@ -101,6 +116,9 @@ func (s *State) maximumMemoryBytes() int {
 }
 
 func (s *State) mutate(change func() error) (err error) {
+	if s.frozen {
+		return errFrozenState
+	}
 	originalVariables := s.vars
 	originalDirectory := s.dir
 	s.vars = s.vars.clone()

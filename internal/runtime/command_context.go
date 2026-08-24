@@ -90,6 +90,12 @@ func (c *CommandContext) ResultUnknown(result *CommandResult, stdout, stderr, ex
 	return result
 }
 
+// UnresolvedResult returns a command result whose output streams and exit
+// status are all unresolved.
+func (c *CommandContext) UnresolvedResult() *CommandResult {
+	return NewUnresolvedResult()
+}
+
 // ResultCurrentExit appends output without replacing an exit status already
 // established through State.
 func (c *CommandContext) ResultCurrentExit(result *CommandResult, stdoutUnknown, stderrUnknown bool) *CommandResult {

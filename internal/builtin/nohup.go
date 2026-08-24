@@ -14,14 +14,14 @@ func init() {
 func executeNohup(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	index := 0
 	if len(invocation.Args) != 0 {
-		argument := invocation.Args[0]
-		if argument.Kind != runtime.ArgumentString {
-			return unresolvedWrapperArgument(shell, invocation.Name)
+		value, ok := wrapperArgument(invocation, 0)
+		if !ok {
+			return unresolvedWrapper()
 		}
-		if argument.Value == "--" {
+		if value == "--" {
 			index++
-		} else if strings.HasPrefix(argument.Value, "-") && argument.Value != "-" {
-			return unsupportedWrapperOption(shell, invocation.Name, argument.Value)
+		} else if strings.HasPrefix(value, "-") && value != "-" {
+			return unresolvedWrapper()
 		}
 	}
 	return invokeExternalWrapper(shell, invocation, index, nil)

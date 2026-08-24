@@ -30,6 +30,7 @@ func (e *ExecutionContext) evaluateBackground(s *State, statement *syntax.Stmt) 
 	results := make([]*pathResult, 0, len(childPaths))
 	for _, childPath := range childPaths {
 		parent := s.clone()
+		inheritPathIdentity(parent, childPath.state)
 		mergeIssue(parent, childPath.state)
 		parent.fs = childPath.state.fs.clone()
 		parent.setExitCode(0)
@@ -82,6 +83,7 @@ func (e *ExecutionContext) evaluateSubshell(s *State, subshell *syntax.Subshell)
 	results := make([]*pathResult, 0, len(childPaths))
 	for _, childPath := range childPaths {
 		parent := s.clone()
+		inheritPathIdentity(parent, childPath.state)
 		mergeIssue(parent, childPath.state)
 		mergeChildInput(parent, childPath.state)
 		parent.fs = childPath.state.fs.clone()
@@ -171,6 +173,9 @@ func (e *ExecutionContext) setSubstitutionAlternatives(s *State, substitution *s
 		return []*pathResult{{state: s, status: status}}, nil
 	}
 
+	e.ensurePathID(s)
+	parentState := e.freezeParentState(s)
+	nodeID := e.trace.currentNodeID(s)
 	paths := make([]*pathResult, 0, 2)
 	s.setSubstitution(substitution, &substitutionResult{
 		stdout:     result.stdout,
@@ -183,6 +188,7 @@ func (e *ExecutionContext) setSubstitutionAlternatives(s *State, substitution *s
 		exitStatus: newCertain(1),
 	})
 	paths = append(paths, &pathResult{state: failureState, status: StatusCompleted})
+	e.assignSuccessorPaths(parentState, nodeID, paths)
 	if err := e.checkPathsMaterialization(paths, 0, sourceLocation(substitution)); err != nil {
 		return paths, err
 	}
@@ -191,10 +197,19 @@ func (e *ExecutionContext) setSubstitutionAlternatives(s *State, substitution *s
 
 func substitutionParent(parentState, childState *State) *State {
 	parent := parentState.clone()
+	inheritPathIdentity(parent, childState)
 	mergeIssue(parent, childState)
 	mergeChildInput(parent, childState)
 	parent.fs = childState.fs.clone()
 	return parent
+}
+
+func inheritPathIdentity(target, source *State) {
+	target.pathID = source.pathID
+	target.parent = source.parent
+	target.retainedParentBytes = source.retainedParentBytes
+	target.frozen = false
+	target.frozenBytes = 0
 }
 
 func substitutionFailureState(parent, childFailure *State) *substitutionFailure {

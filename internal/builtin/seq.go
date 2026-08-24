@@ -28,7 +28,7 @@ func executeSeq(ctx context.Context, invocation *runtime.Invocation, maximum int
 	values := make([]int64, len(invocation.Args))
 	for index, argument := range invocation.Args {
 		if argument.Kind != runtime.ArgumentString {
-			return &runtime.CommandResult{Unresolved: true}, nil
+			return runtime.NewUnresolvedResult(), nil
 		}
 		value, err := strconv.ParseInt(argument.Value, 10, 64)
 		if err != nil {

@@ -83,6 +83,9 @@ initial AST remains unchanged.
 - Solid nodes were reached by the simulator.
 - Purple forks are distinct paths explored because a value or status was
   unresolved.
+- Unregistered commands receive a node-level `unresolved` badge. Unknown inputs
+  are marked on the affected argument or input field, while exit code, stdout,
+  and stderr are marked independently so representative values remain readable.
 - Dashed nodes were found in the parsed syntax but were not reached by any
   simulated path.
 - Every actual visit re-highlights the corresponding AST node. Loop headers and
@@ -126,16 +129,20 @@ middleware. Consequently matching builtins, configured handlers, and fallback
 calls all pass through analysis without separate wrapping. Analysis results are
 discarded; a classified risk error is recorded without stopping the simulation,
 and the selected command's result or error remains authoritative. Detected AST
-nodes and the matching Runtime occurrences are outlined in red, and selecting
-one shows its stable risk `Type` and full detection error in the inspector. The default registry
+nodes and the matching Runtime occurrences are outlined in red as soon as the
+detector runs; selecting one shows its stable risk `Type` and full detection
+error in the inspector. The default registry
 covers destructive root removal through `rm` or `find`, system power commands,
 block-device writes through `mkfs*`, `wipefs`, or `dd`, executable netcat
 or `socat` modes that attach a network channel to a Shell, interactive Shells
 whose input is connected to a concrete `/dev/tcp` or `/dev/udp` endpoint, and
 high-confidence Python or Perl socket payloads that attach process streams and
-launch a Shell. Ordinary file writes, standalone network clients or
-redirections, local interpreter programs, and local Shell pipelines are
-intentionally not classified as risks.
+launch a Shell, FIFO-style pipeline feedback loops that connect an interactive
+Shell to netcat, and `curl` requests that read upload data from a local file or
+stdin. Ordinary `curl` requests, downloads, inline request data, file writes,
+other standalone network clients or redirections, local interpreter programs,
+and non-feedback local Shell pipelines are intentionally not classified as
+risks.
 
 JavaScript handlers run only inside the same disposable browser Worker as the
 WebAssembly simulator. They cannot execute a server or host command, and the

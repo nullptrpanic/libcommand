@@ -17,21 +17,21 @@ func executeSudo(_ context.Context, shell *runtime.CommandContext, invocation *r
 	user := "root"
 	index := 0
 	for index < len(arguments) {
-		argument := arguments[index]
-		if argument.Kind != runtime.ArgumentString {
-			return unresolvedWrapperArgument(shell, invocation.Name)
+		value, ok := wrapperArgument(invocation, index)
+		if !ok {
+			return unresolvedWrapper()
 		}
-		value := argument.Value
 		if value == "--" {
 			index++
 			break
 		}
 		if value == "-u" || value == "--user" || value == "-g" || value == "--group" || value == "-p" || value == "--prompt" || value == "-C" || value == "--close-from" || value == "-T" || value == "--command-timeout" || value == "-h" || value == "--host" {
-			if index+1 >= len(arguments) || arguments[index+1].Kind != runtime.ArgumentString {
-				return unresolvedWrapperArgument(shell, invocation.Name)
+			next, ok := wrapperArgument(invocation, index+1)
+			if !ok {
+				return unresolvedWrapper()
 			}
 			if value == "-u" || value == "--user" {
-				user = arguments[index+1].Value
+				user = next
 			}
 			index += 2
 			continue
@@ -59,21 +59,21 @@ func executeSudo(_ context.Context, shell *runtime.CommandContext, invocation *r
 			continue
 		}
 		if value == "-i" || value == "--login" || value == "-s" || value == "--shell" || value == "-D" || value == "--chdir" || value == "-R" || value == "--chroot" || value == "-l" || value == "--list" || value == "-v" || value == "--validate" || value == "-k" || value == "--reset-timestamp" || value == "-K" || value == "--remove-timestamp" || value == "-V" || value == "--version" || value == "--help" {
-			return unsupportedWrapperOption(shell, invocation.Name, value)
+			return unresolvedWrapper()
 		}
 		if strings.HasPrefix(value, "-") {
-			return unsupportedWrapperOption(shell, invocation.Name, value)
+			return unresolvedWrapper()
 		}
 		break
 	}
 
 	assignments := make(map[string]string)
 	for index < len(arguments) {
-		argument := arguments[index]
-		if argument.Kind != runtime.ArgumentString {
-			return unresolvedWrapperArgument(shell, invocation.Name)
+		value, ok := wrapperArgument(invocation, index)
+		if !ok {
+			return unresolvedWrapper()
 		}
-		name, value, assignment := strings.Cut(argument.Value, "=")
+		name, value, assignment := strings.Cut(value, "=")
 		if !assignment || !syntax.ValidName(name) {
 			break
 		}
@@ -81,7 +81,7 @@ func executeSudo(_ context.Context, shell *runtime.CommandContext, invocation *r
 		index++
 	}
 	if user == "" {
-		return unsupportedWrapperOption(shell, invocation.Name, "empty user")
+		return unresolvedWrapper()
 	}
 	if err := shell.ChangeUser(user); err != nil {
 		return nil, err

@@ -34,7 +34,7 @@ func TestRevDeclinesUnresolvedStdin(t *testing.T) {
 		Name:       "rev",
 		Unresolved: &runtime.InvocationUnresolved{Stdin: true},
 	}, 2<<20)
-	if err != nil || result == nil || !result.Unresolved {
+	if err != nil || !result.AllUnresolved() {
 		t.Fatalf("result = %#v, error = %v", result, err)
 	}
 }

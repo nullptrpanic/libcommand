@@ -12,40 +12,44 @@ import (
 )
 
 type State struct {
-	vars               *variables
-	initialBytes       int
-	user               string
-	functions          map[string]*syntax.FuncDecl
-	functionsBytes     int
-	functionsShared    bool
-	localScopes        []map[string]*savedVariable
-	localScopesBytes   int
-	localScopesShared  bool
-	substitutionFrames []*substitutionFrame
-	substitutionBytes  int
-	dir                *uncertain[string]
-	stdin              *uncertain[[]byte]
-	stdout             *uncertain[[]byte]
-	stderr             *uncertain[[]byte]
-	fs                 *memoryFS
-	issue              error
-	exitStatus         *uncertain[int]
-	exitFailure        *State
-	pipelineStatuses   *uncertain[[]string]
-	options            shellOptions
-	signal             controlSignal
-	signalDepth        int
-	loopDepth          int
-	loopExitStatuses   []*uncertain[int]
-	funcDepth          int
-	sourceDepth        int
-	traps              map[string]string
-	trapsBytes         int
-	trapsShared        bool
-	exitTrapInherited  bool
-	backgroundPIDSet   bool
-	commandStates      map[string][]uint64
-	tracePathID        uint64
+	vars                *variables
+	initialBytes        int
+	user                string
+	functions           map[string]*syntax.FuncDecl
+	functionsBytes      int
+	functionsShared     bool
+	localScopes         []map[string]*savedVariable
+	localScopesBytes    int
+	localScopesShared   bool
+	substitutionFrames  []*substitutionFrame
+	substitutionBytes   int
+	dir                 *uncertain[string]
+	stdin               *uncertain[[]byte]
+	stdout              *uncertain[[]byte]
+	stderr              *uncertain[[]byte]
+	fs                  *memoryFS
+	issue               error
+	exitStatus          *uncertain[int]
+	exitFailure         *State
+	pipelineStatuses    *uncertain[[]string]
+	options             shellOptions
+	signal              controlSignal
+	signalDepth         int
+	loopDepth           int
+	loopExitStatuses    []*uncertain[int]
+	funcDepth           int
+	sourceDepth         int
+	traps               map[string]string
+	trapsBytes          int
+	trapsShared         bool
+	exitTrapInherited   bool
+	backgroundPIDSet    bool
+	commandStates       map[string][]uint64
+	pathID              uint64
+	parent              *State
+	retainedParentBytes int
+	frozen              bool
+	frozenBytes         int
 }
 
 type shellOptions struct {
@@ -169,19 +173,21 @@ func newShellChild(parent *State) *State {
 		vars.put("PWD", pwd)
 	}
 	return &State{
-		vars:             vars,
-		initialBytes:     parent.initialBytes,
-		user:             parent.user,
-		functions:        make(map[string]*syntax.FuncDecl),
-		dir:              parent.dir,
-		stdin:            parent.stdin,
-		stdout:           newCertain[[]byte](nil),
-		stderr:           newCertain[[]byte](nil),
-		exitStatus:       newCertain(0),
-		fs:               parent.fs.clone(),
-		traps:            make(map[string]string),
-		pipelineStatuses: newCertain([]string{"0"}),
-		tracePathID:      parent.tracePathID,
+		vars:                vars,
+		initialBytes:        parent.initialBytes,
+		user:                parent.user,
+		functions:           make(map[string]*syntax.FuncDecl),
+		dir:                 parent.dir,
+		stdin:               parent.stdin,
+		stdout:              newCertain[[]byte](nil),
+		stderr:              newCertain[[]byte](nil),
+		exitStatus:          newCertain(0),
+		fs:                  parent.fs.clone(),
+		traps:               make(map[string]string),
+		pipelineStatuses:    newCertain([]string{"0"}),
+		pathID:              parent.pathID,
+		parent:              parent.parent,
+		retainedParentBytes: parent.retainedParentBytes,
 	}
 }
 
@@ -190,40 +196,44 @@ func (s *State) clone() *State {
 	s.localScopesShared = true
 	s.trapsShared = true
 	return &State{
-		vars:               s.vars.clone(),
-		initialBytes:       s.initialBytes,
-		user:               s.user,
-		functions:          s.functions,
-		functionsBytes:     s.functionsBytes,
-		functionsShared:    true,
-		localScopes:        s.localScopes[:len(s.localScopes):len(s.localScopes)],
-		localScopesBytes:   s.localScopesBytes,
-		localScopesShared:  true,
-		substitutionFrames: cloneSubstitutionFrames(s.substitutionFrames),
-		substitutionBytes:  s.substitutionBytes,
-		dir:                s.dir,
-		stdin:              s.stdin,
-		stdout:             s.stdout,
-		stderr:             s.stderr,
-		fs:                 s.fs.clone(),
-		issue:              s.issue,
-		exitStatus:         s.exitStatus,
-		exitFailure:        s.exitFailure,
-		pipelineStatuses:   s.pipelineStatuses,
-		options:            s.options,
-		signal:             s.signal,
-		signalDepth:        s.signalDepth,
-		loopDepth:          s.loopDepth,
-		loopExitStatuses:   s.loopExitStatuses[:len(s.loopExitStatuses):len(s.loopExitStatuses)],
-		funcDepth:          s.funcDepth,
-		sourceDepth:        s.sourceDepth,
-		traps:              s.traps,
-		trapsBytes:         s.trapsBytes,
-		trapsShared:        true,
-		exitTrapInherited:  s.exitTrapInherited,
-		backgroundPIDSet:   s.backgroundPIDSet,
-		commandStates:      cloneCommandStates(s.commandStates),
-		tracePathID:        s.tracePathID,
+		vars:                s.vars.clone(),
+		initialBytes:        s.initialBytes,
+		user:                s.user,
+		functions:           s.functions,
+		functionsBytes:      s.functionsBytes,
+		functionsShared:     true,
+		localScopes:         s.localScopes[:len(s.localScopes):len(s.localScopes)],
+		localScopesBytes:    s.localScopesBytes,
+		localScopesShared:   true,
+		substitutionFrames:  cloneSubstitutionFrames(s.substitutionFrames),
+		substitutionBytes:   s.substitutionBytes,
+		dir:                 s.dir,
+		stdin:               s.stdin,
+		stdout:              s.stdout,
+		stderr:              s.stderr,
+		fs:                  s.fs.clone(),
+		issue:               s.issue,
+		exitStatus:          s.exitStatus,
+		exitFailure:         s.exitFailure,
+		pipelineStatuses:    s.pipelineStatuses,
+		options:             s.options,
+		signal:              s.signal,
+		signalDepth:         s.signalDepth,
+		loopDepth:           s.loopDepth,
+		loopExitStatuses:    s.loopExitStatuses[:len(s.loopExitStatuses):len(s.loopExitStatuses)],
+		funcDepth:           s.funcDepth,
+		sourceDepth:         s.sourceDepth,
+		traps:               s.traps,
+		trapsBytes:          s.trapsBytes,
+		trapsShared:         true,
+		exitTrapInherited:   s.exitTrapInherited,
+		backgroundPIDSet:    s.backgroundPIDSet,
+		commandStates:       cloneCommandStates(s.commandStates),
+		pathID:              s.pathID,
+		parent:              s.parent,
+		retainedParentBytes: s.retainedParentBytes,
+		frozen:              s.frozen,
+		frozenBytes:         s.frozenBytes,
 	}
 }
 

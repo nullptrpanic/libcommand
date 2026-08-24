@@ -14,5 +14,5 @@ func executeFallback(ctx context.Context, _ *runtime.CommandContext, _ *runtime.
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return &runtime.CommandResult{Unresolved: true}, nil
+	return runtime.NewUnresolvedResult(), nil
 }

@@ -471,15 +471,16 @@ func TestAggregateActivePathsStopBeforeDispatch(t *testing.T) {
 
 func TestAggregateActivePathsStopDuringPathGrowth(t *testing.T) {
 	dispatches := 0
-	stdout := []byte(strings.Repeat("x", 2048))
+	const maximum = 32 << 10
+	stdout := []byte(strings.Repeat("x", maximum))
 	err := Execute(context.Background(), parseForTest(t, `
 if unknown-one; then :; else :; fi
 if unknown-two; then :; else :; fi
 if unknown-three; then :; else :; fi
 inflate
-`, "paths.sh"), &Request{}, &Config{
+	`, "paths.sh"), &Request{}, &Config{
 		MaxExecutionSteps: 100,
-		MaxMemoryBytes:    2048, LookupCommand: lookupCommands(func(name string) bool {
+		MaxMemoryBytes:    maximum, LookupCommand: lookupCommands(func(name string) bool {
 			return name == "inflate"
 		},
 			func(context.Context, *State, *Invocation) (*CommandResult, error) {
@@ -487,7 +488,7 @@ inflate
 				return &CommandResult{Stdout: stdout}, nil
 			}),
 	})
-	if err == nil || !strings.Contains(err.Error(), "maximum materialized byte count 2048 reached") {
+	if err == nil || !strings.Contains(err.Error(), "maximum materialized byte count 32768 reached") {
 		t.Fatalf("Execute() error = %v", err)
 	}
 	if dispatches != 1 {
@@ -530,6 +531,35 @@ func TestPathMaterializationCountsOnlyRetainedUnresolvedStates(t *testing.T) {
 	paths := []*pathResult{first, second}
 	if err := e.checkPathsMaterialization(paths, 0, unknownLocation); err == nil || !strings.Contains(err.Error(), "maximum materialized byte count") {
 		t.Fatalf("two retained unresolved paths error = %v", err)
+	}
+}
+
+func TestPathMaterializationCountsFrozenParentState(t *testing.T) {
+	e, s := newNoOpExecutor(context.Background(), 10, &Request{})
+	e.ensurePathID(s)
+	paths := []*pathResult{
+		{state: s, status: StatusCompleted},
+		{state: s.clone(), status: StatusCompleted},
+	}
+	e.assignSuccessorPaths(s, 0, paths)
+
+	child := paths[0].state
+	if child.parent == nil || !child.parent.frozen || child.retainedParentBytes == 0 {
+		t.Fatalf("child parent = %#v, retained bytes = %d; want frozen retained snapshot", child.parent, child.retainedParentBytes)
+	}
+	withParent, ok := stateMaterialization(child)
+	if !ok {
+		t.Fatal("child materialization with parent overflowed")
+	}
+	parent := child.parent
+	retainedParentBytes := child.retainedParentBytes
+	child.parent = nil
+	child.retainedParentBytes = 0
+	withoutParent, ok := stateMaterialization(child)
+	child.parent = parent
+	child.retainedParentBytes = retainedParentBytes
+	if !ok || withParent-withoutParent != retainedParentBytes {
+		t.Fatalf("parent materialization delta = %d, %t; want %d", withParent-withoutParent, ok, retainedParentBytes)
 	}
 }
 

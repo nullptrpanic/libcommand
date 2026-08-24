@@ -25,7 +25,7 @@ func executeRev(ctx context.Context, invocation *runtime.Invocation, maximum int
 		return revFailure("rev: file operands are not supported\n"), nil
 	}
 	if invocation.Unresolved != nil && invocation.Unresolved.Stdin {
-		return &runtime.CommandResult{Unresolved: true}, nil
+		return runtime.NewUnresolvedResult(), nil
 	}
 	if _, ok := materialize.Add(0, len(invocation.Stdin), maximum); !ok {
 		return nil, materialize.LimitError(maximum)

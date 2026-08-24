@@ -3,40 +3,10 @@ package main
 import (
 	"context"
 	"errors"
-	"path"
-	"strings"
 
 	"github.com/nullptrpanic/libcommand"
 	commandanalysis "github.com/nullptrpanic/libcommand/analysis"
 )
-
-var playgroundAnalysisCommands = map[string]libcommand.Command{
-	"rm":        commandanalysis.RM,
-	"poweroff":  commandanalysis.Poweroff,
-	"reboot":    commandanalysis.Reboot,
-	"halt":      commandanalysis.Halt,
-	"shutdown":  commandanalysis.Shutdown,
-	"init":      commandanalysis.Init,
-	"telinit":   commandanalysis.Telinit,
-	"systemctl": commandanalysis.Systemctl,
-	"nc":        commandanalysis.NC,
-	"ncat":      commandanalysis.Ncat,
-	"netcat":    commandanalysis.Netcat,
-	"socat":     commandanalysis.Socat,
-	"find":      commandanalysis.Find,
-	"mkfs":      commandanalysis.Mkfs,
-	"wipefs":    commandanalysis.Wipefs,
-	"dd":        commandanalysis.DD,
-	"sh":        commandanalysis.Shell,
-	"bash":      commandanalysis.Shell,
-	"dash":      commandanalysis.Shell,
-	"ksh":       commandanalysis.Shell,
-	"zsh":       commandanalysis.Shell,
-	"python":    commandanalysis.Python,
-	"python2":   commandanalysis.Python,
-	"python3":   commandanalysis.Python,
-	"perl":      commandanalysis.Perl,
-}
 
 type playgroundDetection struct {
 	Sequence uint64                   `json:"sequence"`
@@ -57,10 +27,14 @@ type playgroundAnalyzer struct {
 	active     map[uint64][]*playgroundCommandLocation
 	current    *playgroundCommandLocation
 	detections []*playgroundDetection
+	stream     func(*playgroundStreamItem)
 }
 
-func newPlaygroundAnalyzer() *playgroundAnalyzer {
-	return &playgroundAnalyzer{active: make(map[uint64][]*playgroundCommandLocation)}
+func newPlaygroundAnalyzer(stream func(*playgroundStreamItem)) *playgroundAnalyzer {
+	return &playgroundAnalyzer{
+		active: make(map[uint64][]*playgroundCommandLocation),
+		stream: stream,
+	}
 }
 
 func (a *playgroundAnalyzer) middleware(next libcommand.Command) libcommand.Command {
@@ -71,41 +45,41 @@ func (a *playgroundAnalyzer) middleware(next libcommand.Command) libcommand.Comm
 }
 
 func (a *playgroundAnalyzer) detect(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) {
-	handler := playgroundAnalysisCommands[invocation.Name]
-	if handler == nil {
-		base := path.Base(invocation.Name)
-		handler = playgroundAnalysisCommands[base]
-		if handler == nil && strings.HasPrefix(base, "mkfs.") {
-			handler = commandanalysis.Mkfs
-		}
-		if handler == nil && strings.HasPrefix(base, "python") {
-			handler = commandanalysis.Python
-		}
-	}
+	handler := lookupPlaygroundAnalysisCommand(invocation.Name)
 	if handler == nil {
 		return
 	}
 	a.runDetector(ctx, shell, invocation, handler)
 }
 
-func (a *playgroundAnalyzer) runDetector(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation, handler libcommand.Command) bool {
+func (a *playgroundAnalyzer) runDetector(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation, handler libcommand.Command) {
 	_, err := handler(ctx, shell, invocation)
 	detectionError := new(commandanalysis.DetectionError)
 	if !errors.As(err, &detectionError) {
-		return false
+		return
 	}
-	detection := &playgroundDetection{
+	a.recordDetection(&playgroundDetection{
 		Command: invocation.Name,
 		Type:    detectionError.Type,
 		Error:   err.Error(),
+	}, a.current)
+}
+
+func (a *playgroundAnalyzer) recordDetection(detection *playgroundDetection, location *playgroundCommandLocation) {
+	if location != nil {
+		detection.Sequence = location.Sequence
+		detection.NodeID = location.NodeID
+		detection.PathID = location.PathID
 	}
-	if a.current != nil {
-		detection.Sequence = a.current.Sequence
-		detection.NodeID = a.current.NodeID
-		detection.PathID = a.current.PathID
+	for _, existing := range a.detections {
+		if existing.Sequence == detection.Sequence && existing.Type == detection.Type {
+			return
+		}
 	}
 	a.detections = append(a.detections, detection)
-	return true
+	if a.stream != nil {
+		a.stream(&playgroundStreamItem{Type: "detection", Detection: detection})
+	}
 }
 
 func (a *playgroundAnalyzer) observe(event *libcommand.TraceEvent) {

@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"strconv"
 
 	"mvdan.cc/sh/v3/expand"
@@ -91,6 +92,12 @@ func (c *CommandContext) PathKind(name string) PathKind {
 
 func (c *CommandContext) EnsureDirectory(name string) error {
 	return c.state.fs.ensureDir(name)
+}
+
+// RemovePath removes one resolved path from the virtual filesystem. Recursive
+// removal preserves the virtual root while deleting all of its contents.
+func (c *CommandContext) RemovePath(ctx context.Context, name string, recursive bool) error {
+	return c.state.fs.remove(ctx, name, recursive)
 }
 
 func (c *CommandContext) Format(format string, arguments []string) (string, error) {
@@ -195,7 +202,15 @@ func (c *CommandContext) Snapshot() *State {
 }
 
 func (c *CommandContext) Restore(snapshot *State) {
+	pathID := c.state.pathID
+	parent := c.state.parent
+	retainedParentBytes := c.state.retainedParentBytes
 	*c.state = *snapshot
+	c.state.pathID = pathID
+	c.state.parent = parent
+	c.state.retainedParentBytes = retainedParentBytes
+	c.state.frozen = false
+	c.state.frozenBytes = 0
 }
 
 func (c *CommandContext) SetUnknownExitWithFailure(snapshot *State) {

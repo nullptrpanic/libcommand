@@ -7,26 +7,22 @@ import (
 )
 
 func invokeExternalWrapper(shell *runtime.CommandContext, invocation *runtime.Invocation, target int, assignments map[string]string) (*runtime.CommandResult, error) {
-	if target >= len(invocation.Args) {
-		return unresolvedWrapper(), nil
+	name, ok := wrapperArgument(invocation, target)
+	if !ok {
+		return unresolvedWrapper()
 	}
-	argument := invocation.Args[target]
-	if argument.Kind != runtime.ArgumentString {
-		return unresolvedWrapper(), nil
+	return shell.InvokeWithEnvironment(name, invocation.Args[target+1:], false, nil, assignments), nil
+}
+
+func wrapperArgument(invocation *runtime.Invocation, index int) (string, bool) {
+	if index >= len(invocation.Args) || invocation.Args[index].Kind != runtime.ArgumentString {
+		return "", false
 	}
-	return shell.InvokeWithEnvironment(argument.Value, invocation.Args[target+1:], false, nil, assignments), nil
+	return invocation.Args[index].Value, true
 }
 
-func unresolvedWrapperArgument(_ *runtime.CommandContext, _ string) (*runtime.CommandResult, error) {
-	return unresolvedWrapper(), nil
-}
-
-func unsupportedWrapperOption(_ *runtime.CommandContext, _, _ string) (*runtime.CommandResult, error) {
-	return unresolvedWrapper(), nil
-}
-
-func unresolvedWrapper() *runtime.CommandResult {
-	return &runtime.CommandResult{Unresolved: true}
+func unresolvedWrapper() (*runtime.CommandResult, error) {
+	return runtime.NewUnresolvedResult(), nil
 }
 
 func shortFlagsOnly(value, allowed string) bool {

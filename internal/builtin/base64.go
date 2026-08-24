@@ -27,7 +27,7 @@ func executeBase64(ctx context.Context, invocation *runtime.Invocation, maximum 
 	options := true
 	for _, argument := range invocation.Args {
 		if argument.Kind != runtime.ArgumentString {
-			return &runtime.CommandResult{Unresolved: true}, nil
+			return runtime.NewUnresolvedResult(), nil
 		}
 		if options {
 			switch argument.Value {
@@ -45,7 +45,7 @@ func executeBase64(ctx context.Context, invocation *runtime.Invocation, maximum 
 		return base64Failure("base64: file operands are not supported\n"), nil
 	}
 	if invocation.Unresolved != nil && invocation.Unresolved.Stdin {
-		return &runtime.CommandResult{Unresolved: true}, nil
+		return runtime.NewUnresolvedResult(), nil
 	}
 
 	if decode {

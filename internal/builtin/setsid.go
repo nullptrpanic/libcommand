@@ -14,11 +14,10 @@ func init() {
 func executeSetsid(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	index := 0
 	for index < len(invocation.Args) {
-		argument := invocation.Args[index]
-		if argument.Kind != runtime.ArgumentString {
-			return unresolvedWrapperArgument(shell, invocation.Name)
+		value, ok := wrapperArgument(invocation, index)
+		if !ok {
+			return unresolvedWrapper()
 		}
-		value := argument.Value
 		if value == "--" {
 			index++
 			break
@@ -30,7 +29,7 @@ func executeSetsid(_ context.Context, shell *runtime.CommandContext, invocation 
 			index++
 			continue
 		}
-		return unsupportedWrapperOption(shell, invocation.Name, value)
+		return unresolvedWrapper()
 	}
 	return invokeExternalWrapper(shell, invocation, index, nil)
 }

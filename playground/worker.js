@@ -40,10 +40,10 @@ self.onmessage = async ({ data }) => {
     }
     activeCommandHandlers = handlerRuntime.compileCommandHandlers(request?.commands || []);
     try {
-      const streamTrace = (encodedEvent) => {
-        self.postMessage({ id, type: "trace", event: JSON.parse(encodedEvent) });
+      const streamItem = (encodedItem) => {
+		self.postMessage({ id, ...JSON.parse(encodedItem) });
       };
-      const result = JSON.parse(self.libcommandAnalyze(JSON.stringify(request), streamTrace));
+      const result = JSON.parse(self.libcommandAnalyze(JSON.stringify(request), streamItem));
       self.postMessage({ id, type: "result", result });
     } finally {
       activeCommandHandlers = new Map();

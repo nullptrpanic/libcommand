@@ -200,6 +200,7 @@ func (c *CommandContext) shellChildResults(parent *State, childPaths []*pathResu
 	paths := make([]*pathResult, 0, len(childPaths))
 	for _, childPath := range childPaths {
 		result := parent.clone()
+		inheritPathIdentity(result, childPath.state)
 		mergeIssue(result, childPath.state)
 		mergeChildInput(result, childPath.state)
 		result.fs = childPath.state.fs.clone()

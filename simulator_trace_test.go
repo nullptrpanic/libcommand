@@ -298,9 +298,15 @@ func TestSimulateTraceMarksOnlyExecutedKnownBranch(t *testing.T) {
 
 func TestSimulateTraceRecordsUnresolvedPathFork(t *testing.T) {
 	var events []*libcommand.TraceEvent
-	simulator := libcommand.NewBuilder().Build()
+	statePaths := make(map[string]uint64)
+	simulator := libcommand.NewBuilder().
+		Command("record", func(_ context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			statePaths[invocation.Args[0].Value] = command.State().PathID()
+			return &libcommand.CommandResult{}, nil
+		}).
+		Build()
 	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{
-		Source: "if unknown-command; then\n  echo yes\nelse\n  echo no\nfi\n",
+		Source: "if unknown-command; then\n  record yes\nelse\n  record no\nfi\n",
 	}, collectTrace(&events))
 	if err != nil {
 		t.Fatal(err)
@@ -308,15 +314,19 @@ func TestSimulateTraceRecordsUnresolvedPathFork(t *testing.T) {
 
 	var children []uint64
 	var forkSequence uint64
+	var forkEvent *libcommand.TraceEvent
 	branchPaths := make(map[uint64]bool)
+	branchParents := make(map[uint64]uint64)
 	for _, event := range events {
 		if event.Kind == libcommand.TracePathForked && len(event.ChildPathIDs) == 2 {
 			children = event.ChildPathIDs
 			forkSequence = event.Sequence
+			forkEvent = event
 		}
 		if event.Kind == libcommand.TraceStatementStarted && event.Node != nil &&
-			(event.Node.Snippet == "echo yes" || event.Node.Snippet == "echo no") {
+			(event.Node.Snippet == "record yes" || event.Node.Snippet == "record no") {
 			branchPaths[event.PathID] = true
+			branchParents[event.PathID] = event.ParentPathID
 		}
 	}
 	if len(children) != 2 {
@@ -324,6 +334,17 @@ func TestSimulateTraceRecordsUnresolvedPathFork(t *testing.T) {
 	}
 	if len(branchPaths) != 2 || !branchPaths[children[0]] || !branchPaths[children[1]] {
 		t.Fatalf("executed branch paths = %#v, fork children = %#v", branchPaths, children)
+	}
+	if len(statePaths) != 2 || !branchPaths[statePaths["yes"]] || !branchPaths[statePaths["no"]] {
+		t.Fatalf("state paths = %#v, traced branch paths = %#v", statePaths, branchPaths)
+	}
+	if forkEvent == nil || forkEvent.ParentPathID != 0 {
+		t.Fatalf("root fork event = %#v, want no parent", forkEvent)
+	}
+	for _, child := range children {
+		if branchParents[child] != forkEvent.PathID {
+			t.Fatalf("child %d parent = %d, want %d", child, branchParents[child], forkEvent.PathID)
+		}
 	}
 	firstChildEvent := make(map[uint64]*libcommand.TraceEvent)
 	for _, event := range events {
@@ -540,10 +561,76 @@ func TestSimulateTraceReportsCommandAndPathCompletion(t *testing.T) {
 	}
 }
 
+func TestSimulateTraceOverallUnresolvedRequiresEveryResultDimension(t *testing.T) {
+	var result *libcommand.TraceCommandResult
+	simulator := libcommand.NewBuilder().Command("partial",
+		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return command.ResultUnknown(&libcommand.CommandResult{}, true, false, false), nil
+		}).Build()
+	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{Source: "partial"}, func(event *libcommand.TraceEvent) bool {
+		if event.Kind == libcommand.TraceCommandFinished {
+			result = event.CommandResult
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.StdoutUnresolved || result.StderrUnresolved || result.ExitCodeUnresolved {
+		t.Fatalf("command result = %#v, want only stdout unresolved", result)
+	}
+	if result.Unresolved {
+		t.Fatalf("command result = %#v, partially unresolved result must not be wholly unresolved", result)
+	}
+}
+
+func TestCommandContextUnresolvedResultMarksEveryResultDimension(t *testing.T) {
+	var result *libcommand.TraceCommandResult
+	simulator := libcommand.NewBuilder().Command("unknown",
+		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return command.UnresolvedResult(), nil
+		}).Build()
+	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{Source: "unknown"}, func(event *libcommand.TraceEvent) bool {
+		if event.Kind == libcommand.TraceCommandFinished {
+			result = event.CommandResult
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.StdoutUnresolved || !result.StderrUnresolved || !result.ExitCodeUnresolved || !result.Unresolved {
+		t.Fatalf("command result = %#v, want every dimension unresolved", result)
+	}
+}
+
+func TestSimulateTraceErrorResultIsNotWhollyUnresolved(t *testing.T) {
+	var result *libcommand.TraceCommandResult
+	simulator := libcommand.NewBuilder().Command("fail",
+		func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return nil, errors.New("failed")
+		}).Build()
+	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{Source: "fail"}, func(event *libcommand.TraceEvent) bool {
+		if event.Kind == libcommand.TraceCommandFinished {
+			result = event.CommandResult
+		}
+		return true
+	})
+	if err == nil {
+		t.Fatal("SimulateTrace() error = nil, want handler error")
+	}
+	if result == nil || result.StdoutUnresolved || result.StderrUnresolved || !result.ExitCodeUnresolved {
+		t.Fatalf("command result = %#v, want only exit code unresolved", result)
+	}
+	if result.Unresolved {
+		t.Fatalf("command result = %#v, error result must not be wholly unresolved", result)
+	}
+}
+
 func TestSimulateTraceSnapshotsCaptureCurrentCommandOutput(t *testing.T) {
 	simulator := libcommand.NewBuilder().Command("unknown-command",
-		func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return &libcommand.CommandResult{Unresolved: true}, nil
+		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return command.UnresolvedResult(), nil
 		}).Build()
 	var unknownResult, echoResult *libcommand.TraceCommandResult
 	activeCommands := make(map[uint64]string)

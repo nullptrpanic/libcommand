@@ -205,7 +205,10 @@ func (e *ExecutionContext) evaluateCase(s *State, clause *syntax.CaseClause) ([]
 					if err := e.checkRepeatedPathMaterialization(path, 2, sourceLocation(item)); err != nil {
 						return append(finished, path), err
 					}
+					e.ensurePathID(path.state)
+					nodeID := e.trace.currentNodeID(path.state)
 					branch.state = path.state.clone()
+					e.assignSuccessorPaths(path.state, nodeID, []*pathResult{path, branch})
 				}
 				activeBranches := pathResults(next)
 				if err := e.checkPathGroupsMaterialization(0, sourceLocation(item), finished, activeBranches, []*pathResult{branch}); err != nil {

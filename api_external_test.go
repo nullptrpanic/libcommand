@@ -123,6 +123,167 @@ func TestPublicStateMutation(t *testing.T) {
 	}
 }
 
+func TestStatePathIdentityIsAvailableWithoutTrace(t *testing.T) {
+	pathIDs := make(map[string][]uint64)
+	parentIDs := make(map[string][]uint64)
+	grandparentIDs := make(map[string][]uint64)
+	parentPointers := make(map[string][]uintptr)
+	simulator := libcommand.NewBuilder().
+		Command("record", func(_ context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			if len(invocation.Args) != 1 || invocation.Args[0].Kind != libcommand.ArgumentString {
+				t.Fatalf("record arguments = %#v, want one concrete label", invocation.Args)
+			}
+			label := invocation.Args[0].Value
+			state := command.State()
+			pathIDs[label] = append(pathIDs[label], state.PathID())
+			parent := state.Parent()
+			if parent == nil {
+				parentIDs[label] = append(parentIDs[label], 0)
+				grandparentIDs[label] = append(grandparentIDs[label], 0)
+				parentPointers[label] = append(parentPointers[label], 0)
+				return &libcommand.CommandResult{}, nil
+			}
+			parentIDs[label] = append(parentIDs[label], parent.PathID())
+			parentPointers[label] = append(parentPointers[label], reflect.ValueOf(parent).Pointer())
+			grandparent := parent.Parent()
+			if grandparent == nil {
+				grandparentIDs[label] = append(grandparentIDs[label], 0)
+			} else {
+				grandparentIDs[label] = append(grandparentIDs[label], grandparent.PathID())
+			}
+			return &libcommand.CommandResult{}, nil
+		}).
+		Command("maybe", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return command.ResultUnknown(&libcommand.CommandResult{}, false, false, true), nil
+		}).
+		Build()
+
+	source := `record root
+if maybe; then
+  record left
+  if maybe; then record left-yes; else record left-no; fi
+else
+  record right
+fi`
+	if err := simulator.Simulate(context.Background(), &libcommand.SimulationRequest{Source: source}); err != nil {
+		t.Fatal(err)
+	}
+
+	rootID := onlyUint64(t, pathIDs, "root")
+	if rootID == 0 || onlyUint64(t, parentIDs, "root") != 0 {
+		t.Fatalf("root path = %d parent %d, want nonzero path with no parent", rootID, onlyUint64(t, parentIDs, "root"))
+	}
+	leftID := onlyUint64(t, pathIDs, "left")
+	rightID := onlyUint64(t, pathIDs, "right")
+	leftParentPointer := onlyUintptr(t, parentPointers, "left")
+	if leftID == rightID || onlyUint64(t, parentIDs, "left") != rootID || onlyUint64(t, parentIDs, "right") != rootID ||
+		leftParentPointer == 0 || onlyUintptr(t, parentPointers, "right") != leftParentPointer {
+		t.Fatalf("first fork: root=%d left=%d/%d right=%d/%d, want distinct children sharing one root snapshot", rootID, leftID, onlyUint64(t, parentIDs, "left"), rightID, onlyUint64(t, parentIDs, "right"))
+	}
+	leftYesID := onlyUint64(t, pathIDs, "left-yes")
+	leftNoID := onlyUint64(t, pathIDs, "left-no")
+	if leftYesID == leftNoID || onlyUint64(t, parentIDs, "left-yes") != leftID || onlyUint64(t, parentIDs, "left-no") != leftID ||
+		onlyUint64(t, grandparentIDs, "left-yes") != rootID || onlyUint64(t, grandparentIDs, "left-no") != rootID {
+		t.Fatalf("nested fork: root=%d left=%d yes=%d/%d no=%d/%d, want distinct children of left", rootID, leftID, leftYesID, onlyUint64(t, parentIDs, "left-yes"), leftNoID, onlyUint64(t, parentIDs, "left-no"))
+	}
+	if onlyUint64(t, parentIDs, "left") != rootID || onlyUint64(t, grandparentIDs, "left") != 0 {
+		t.Fatal("later forks changed an existing parent relationship")
+	}
+}
+
+func TestStatePathIdentityForksBeforeSubstitutionContinuation(t *testing.T) {
+	pathIDs := make(map[string][]uint64)
+	parentIDs := make(map[string][]uint64)
+	simulator := libcommand.NewBuilder().
+		Command("record", func(_ context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			if len(invocation.Args) != 1 || invocation.Args[0].Kind != libcommand.ArgumentString {
+				t.Fatalf("record arguments = %#v, want one concrete label", invocation.Args)
+			}
+			label := invocation.Args[0].Value
+			state := command.State()
+			pathIDs[label] = append(pathIDs[label], state.PathID())
+			parentID := uint64(0)
+			if parent := state.Parent(); parent != nil {
+				parentID = parent.PathID()
+			}
+			parentIDs[label] = append(parentIDs[label], parentID)
+			return &libcommand.CommandResult{}, nil
+		}).
+		Command("maybe", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return command.ResultUnknown(&libcommand.CommandResult{}, false, false, true), nil
+		}).
+		Build()
+
+	source := `record root
+record "$(if maybe; then printf substitution-left; else printf substitution-right; fi)"`
+	if err := simulator.Simulate(context.Background(), &libcommand.SimulationRequest{Source: source}); err != nil {
+		t.Fatal(err)
+	}
+
+	rootID := onlyUint64(t, pathIDs, "root")
+	leftID := onlyUint64(t, pathIDs, "substitution-left")
+	rightID := onlyUint64(t, pathIDs, "substitution-right")
+	if leftID == rightID || onlyUint64(t, parentIDs, "substitution-left") != rootID || onlyUint64(t, parentIDs, "substitution-right") != rootID {
+		t.Fatalf("substitution fork: root=%d left=%d/%d right=%d/%d, want distinct children of root", rootID, leftID, onlyUint64(t, parentIDs, "substitution-left"), rightID, onlyUint64(t, parentIDs, "substitution-right"))
+	}
+}
+
+func TestParentStateIsFrozenAtFork(t *testing.T) {
+	var observations int
+	simulator := libcommand.NewBuilder().
+		Command("inspect", func(_ context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			currentValue, currentExists, currentResolved := command.State().Variable("VALUE")
+			if currentValue != "before" || !currentExists || !currentResolved {
+				t.Fatalf("child VALUE = %q, %v, %v, want before, true, true", currentValue, currentExists, currentResolved)
+			}
+			parent := command.State().Parent()
+			if parent == nil {
+				t.Fatal("forked state has no parent")
+			}
+			value, exists, resolved := parent.Variable("VALUE")
+			if value != "before" || !exists || !resolved {
+				t.Fatalf("parent VALUE = %q, %v, %v, want before, true, true", value, exists, resolved)
+			}
+			if err := parent.SetVariable("VALUE", "polluted"); err == nil {
+				t.Fatal("parent state mutation succeeded")
+			}
+			if err := command.State().SetVariable("VALUE", invocation.Args[0].Value); err != nil {
+				return nil, err
+			}
+			observations++
+			return &libcommand.CommandResult{}, nil
+		}).
+		Command("maybe", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return command.ResultUnknown(&libcommand.CommandResult{}, false, false, true), nil
+		}).
+		Build()
+
+	if err := simulator.Simulate(context.Background(), &libcommand.SimulationRequest{Source: `VALUE=before; if maybe; then inspect left; else inspect right; fi`}); err != nil {
+		t.Fatal(err)
+	}
+	if observations != 2 {
+		t.Fatalf("observations = %d, want 2", observations)
+	}
+}
+
+func onlyUint64(t *testing.T, values map[string][]uint64, label string) uint64 {
+	t.Helper()
+	observations := values[label]
+	if len(observations) != 1 {
+		t.Fatalf("values[%q] = %v, want one observation", label, observations)
+	}
+	return observations[0]
+}
+
+func onlyUintptr(t *testing.T, values map[string][]uintptr, label string) uintptr {
+	t.Helper()
+	observations := values[label]
+	if len(observations) != 1 {
+		t.Fatalf("values[%q] = %v, want one observation", label, observations)
+	}
+	return observations[0]
+}
+
 func TestBuilderUsesLastCommandRegistration(t *testing.T) {
 	var calls []string
 	first := func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {

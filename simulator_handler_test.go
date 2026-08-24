@@ -420,10 +420,10 @@ func TestUserWildcardMakesUnknownCommandsObservableCandidates(t *testing.T) {
 	var names []string
 	consumerArgumentCount := 0
 	consumerArgumentKind := ArgumentString
-	simulator := NewBuilder().Command("*", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := NewBuilder().Command("*", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		names = append(names, invocation.Name)
 		if invocation.Name == "producer" {
-			return &CommandResult{Unresolved: true}, nil
+			return command.UnresolvedResult(), nil
 		}
 		consumerArgumentCount = len(invocation.Args)
 		if consumerArgumentCount != 0 {
@@ -596,8 +596,8 @@ func TestSimulatorDispatchLimitsCombinedHandlerOutput(t *testing.T) {
 }
 
 func TestSimulatorAcceptsUnresolvedHandlerResult(t *testing.T) {
-	simulator := mustBuildSimulator(t, "unknown", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
-		return &CommandResult{Unresolved: true}, nil
+	simulator := mustBuildSimulator(t, "unknown", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+		return command.UnresolvedResult(), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `unknown`}); err != nil {
 		t.Fatal(err)

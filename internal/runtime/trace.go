@@ -189,7 +189,6 @@ type executionTrace struct {
 	observer         TraceObserver
 	sequence         uint64
 	nextNodeID       uint64
-	nextPathID       uint64
 	nodeIDs          map[syntax.Node]uint64
 	nodes            map[uint64]*TraceNode
 	lastNode         map[uint64]uint64
@@ -410,23 +409,23 @@ func traceFlowFunction(statement *syntax.Stmt) string {
 	return declaration.Name.Value
 }
 
-func (trace *executionTrace) ensurePath(state *State) uint64 {
-	if trace == nil || trace.observer == nil || state == nil {
-		return 0
-	}
-	if state.tracePathID != 0 {
-		return state.tracePathID
-	}
-	trace.nextPathID++
-	state.tracePathID = trace.nextPathID
-	return state.tracePathID
-}
-
 func (trace *executionTrace) currentNodeID(state *State) uint64 {
 	if trace == nil || state == nil {
 		return 0
 	}
-	return trace.lastNode[state.tracePathID]
+	pathID, _ := tracePathIDs(state)
+	return trace.lastNode[pathID]
+}
+
+func tracePathIDs(state *State) (uint64, uint64) {
+	if state == nil {
+		return 0, 0
+	}
+	parentPathID := uint64(0)
+	if state.parent != nil {
+		parentPathID = state.parent.pathID
+	}
+	return state.pathID, parentPathID
 }
 
 func (trace *executionTrace) nodeID(node syntax.Node) uint64 {
@@ -436,14 +435,14 @@ func (trace *executionTrace) nodeID(node syntax.Node) uint64 {
 	return trace.nodeIDs[node]
 }
 
-func (trace *executionTrace) statementStarted(execution *ExecutionContext, state *State, statement *syntax.Stmt, budget *retainedPathBudget) uint64 {
+func (trace *executionTrace) statementStarted(execution *ExecutionContext, state *State, statement *syntax.Stmt, budget *retainedPathBudget) {
 	if trace == nil || trace.observer == nil {
-		return 0
+		return
 	}
-	pathID := trace.ensurePath(state)
+	pathID, parentPathID := tracePathIDs(state)
 	nodeID := trace.nodeIDs[statement]
 	if nodeID == 0 {
-		return 0
+		return
 	}
 	memory := execution.traceMemory(state, budget)
 	trace.aggregate = memory.AggregateBytes
@@ -454,6 +453,7 @@ func (trace *executionTrace) statementStarted(execution *ExecutionContext, state
 		Node:              trace.nodes[nodeID],
 		NodeID:            nodeID,
 		PathID:            pathID,
+		ParentPathID:      parentPathID,
 		PreviousSequence:  trace.lastEvent[pathID],
 		Steps:             execution.executedSteps,
 		Memory:            memory,
@@ -462,7 +462,6 @@ func (trace *executionTrace) statementStarted(execution *ExecutionContext, state
 	})
 	trace.lastNode[pathID] = nodeID
 	trace.lastEvent[pathID] = sequence
-	return pathID
 }
 
 // statementActivated reports that control re-entered a statement which still
@@ -473,7 +472,7 @@ func (trace *executionTrace) statementActivated(execution *ExecutionContext, sta
 	if trace == nil || trace.observer == nil || state == nil || node == nil {
 		return
 	}
-	pathID := trace.ensurePath(state)
+	pathID, parentPathID := tracePathIDs(state)
 	nodeID := trace.nodeIDs[node]
 	if nodeID == 0 {
 		return
@@ -484,6 +483,7 @@ func (trace *executionTrace) statementActivated(execution *ExecutionContext, sta
 		Node:              trace.nodes[nodeID],
 		NodeID:            nodeID,
 		PathID:            pathID,
+		ParentPathID:      parentPathID,
 		PreviousSequence:  trace.lastEvent[pathID],
 		Steps:             execution.executedSteps,
 		Memory:            execution.traceMemoryWithAggregate(state, trace.aggregate, trace.paths),
@@ -494,54 +494,31 @@ func (trace *executionTrace) statementActivated(execution *ExecutionContext, sta
 	trace.lastEvent[pathID] = sequence
 }
 
-func (trace *executionTrace) assignSuccessorPaths(parentPathID, nodeID uint64, successors []*pathResult) {
-	if trace == nil || trace.observer == nil || len(successors) == 0 {
+func (trace *executionTrace) pathForked(parent *State, nodeID uint64, children []*State) {
+	if trace == nil || trace.observer == nil || len(children) == 0 {
 		return
 	}
-	if len(successors) == 1 {
-		if successors[0].state.tracePathID == 0 {
-			successors[0].state.tracePathID = parentPathID
-		}
-		return
-	}
-
-	seen := make(map[uint64]struct{}, len(successors))
-	requiresFork := false
-	for _, successor := range successors {
-		pathID := successor.state.tracePathID
-		if pathID == 0 || pathID == parentPathID {
-			requiresFork = true
-			break
-		}
-		if _, duplicate := seen[pathID]; duplicate {
-			requiresFork = true
-			break
-		}
-		seen[pathID] = struct{}{}
-	}
-	if !requiresFork {
-		return
-	}
-
-	children := make([]uint64, len(successors))
-	for index, successor := range successors {
-		trace.nextPathID++
-		childID := trace.nextPathID
-		successor.state.tracePathID = childID
-		children[index] = childID
+	childIDs := make([]uint64, len(children))
+	for index, child := range children {
+		childID := child.pathID
+		childIDs[index] = childID
 		trace.lastNode[childID] = nodeID
+	}
+	parentPathID := uint64(0)
+	if parent.parent != nil {
+		parentPathID = parent.parent.pathID
 	}
 	sequence := trace.emit(&TraceEvent{
 		Kind:             TracePathForked,
 		Node:             trace.nodes[nodeID],
 		NodeID:           nodeID,
-		PathID:           parentPathID,
+		PathID:           parent.pathID,
 		ParentPathID:     parentPathID,
-		ChildPathIDs:     children,
-		PreviousSequence: trace.lastEvent[parentPathID],
+		ChildPathIDs:     childIDs,
+		PreviousSequence: trace.lastEvent[parent.pathID],
 	})
-	trace.lastEvent[parentPathID] = sequence
-	for _, childID := range children {
+	trace.lastEvent[parent.pathID] = sequence
+	for _, childID := range childIDs {
 		trace.lastEvent[childID] = sequence
 	}
 }
@@ -555,13 +532,14 @@ func (trace *executionTrace) statementFinished(execution *ExecutionContext, stat
 		memory := execution.traceMemory(successor.state, budget)
 		trace.aggregate = memory.AggregateBytes
 		trace.paths = memory.RetainedPaths
-		pathID := successor.state.tracePathID
+		pathID, parentPathID := tracePathIDs(successor.state)
 		snapshot, snapshotTruncated := trace.stateSnapshot(successor.state)
 		sequence := trace.emit(&TraceEvent{
 			Kind:              TraceStatementFinished,
 			Node:              trace.nodes[nodeID],
 			NodeID:            nodeID,
 			PathID:            pathID,
+			ParentPathID:      parentPathID,
 			PreviousSequence:  trace.lastEvent[pathID],
 			Steps:             execution.executedSteps,
 			Memory:            memory,
@@ -740,7 +718,7 @@ func (trace *executionTrace) commandStarted(execution *ExecutionContext, state *
 	if trace == nil || trace.observer == nil {
 		return
 	}
-	pathID := trace.ensurePath(state)
+	pathID, parentPathID := tracePathIDs(state)
 	nodeID := trace.nodeIDs[commandSyntax]
 	if nodeID == 0 {
 		nodeID = trace.lastNode[pathID]
@@ -750,6 +728,7 @@ func (trace *executionTrace) commandStarted(execution *ExecutionContext, state *
 		Node:             trace.nodes[nodeID],
 		NodeID:           nodeID,
 		PathID:           pathID,
+		ParentPathID:     parentPathID,
 		PreviousSequence: trace.lastEvent[pathID],
 		Steps:            execution.executedSteps,
 		Memory:           execution.traceMemoryWithAggregate(state, trace.aggregate, trace.paths),
@@ -762,7 +741,7 @@ func (trace *executionTrace) commandFinished(execution *ExecutionContext, state 
 	if trace == nil || trace.observer == nil {
 		return
 	}
-	pathID := trace.ensurePath(state)
+	pathID, parentPathID := tracePathIDs(state)
 	nodeID := trace.nodeIDs[commandSyntax]
 	if nodeID == 0 {
 		nodeID = trace.lastNode[pathID]
@@ -772,6 +751,7 @@ func (trace *executionTrace) commandFinished(execution *ExecutionContext, state 
 		Node:             trace.nodes[nodeID],
 		NodeID:           nodeID,
 		PathID:           pathID,
+		ParentPathID:     parentPathID,
 		PreviousSequence: trace.lastEvent[pathID],
 		Steps:            execution.executedSteps,
 		Memory:           execution.traceMemoryWithAggregate(state, trace.aggregate, trace.paths),
@@ -789,12 +769,13 @@ func (trace *executionTrace) pathsCompleted(execution *ExecutionContext, paths [
 	}
 	budget, _ := execution.newRetainedPathBudget(paths)
 	for _, path := range paths {
-		pathID := trace.ensurePath(path.state)
+		pathID, parentPathID := tracePathIDs(path.state)
 		sequence := trace.emit(&TraceEvent{
 			Kind:             TracePathCompleted,
 			Node:             trace.nodes[trace.lastNode[pathID]],
 			NodeID:           trace.lastNode[pathID],
 			PathID:           pathID,
+			ParentPathID:     parentPathID,
 			PreviousSequence: trace.lastEvent[pathID],
 			Steps:            execution.executedSteps,
 			Memory:           execution.traceMemory(path.state, budget),
@@ -888,7 +869,7 @@ func (trace *executionTrace) commandResult(result *CommandResult, err error) *Tr
 func traceCommandResult(result *CommandResult, err error) *TraceCommandResult {
 	if result == nil {
 		if err != nil {
-			return &TraceCommandResult{ExitCodeUnresolved: true, Unresolved: true}
+			return &TraceCommandResult{ExitCodeUnresolved: true}
 		}
 		return &TraceCommandResult{
 			StdoutUnresolved:   true,
@@ -900,11 +881,6 @@ func traceCommandResult(result *CommandResult, err error) *TraceCommandResult {
 	stdoutUnresolved := result.stdoutUnknown
 	stderrUnresolved := result.stderrUnknown
 	exitCodeUnresolved := result.exitUnknown
-	if result.Unresolved {
-		stdoutUnresolved = true
-		stderrUnresolved = true
-		exitCodeUnresolved = true
-	}
 	return &TraceCommandResult{
 		ExitCode:           result.ExitCode,
 		StdoutBytes:        len(result.Stdout),
@@ -913,7 +889,7 @@ func traceCommandResult(result *CommandResult, err error) *TraceCommandResult {
 		StdoutUnresolved:   stdoutUnresolved,
 		StderrUnresolved:   stderrUnresolved,
 		ExitCodeUnresolved: exitCodeUnresolved,
-		Unresolved:         stdoutUnresolved || stderrUnresolved || exitCodeUnresolved,
+		Unresolved:         result.AllUnresolved(),
 	}
 }
 

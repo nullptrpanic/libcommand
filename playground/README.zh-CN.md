@@ -73,6 +73,8 @@ Runtime 中，初始 AST 始终保持不变。
   被任何路径执行的语句仍然保留，便于对比语法结构和可达性。
 - 实线节点表示模拟器已经执行过该节点。
 - 紫色分叉表示因为某个值或状态 unresolved 而探索出的不同路径。
+- 未注册命令在节点上标记 `unresolved`；未知输入只标记对应参数或输入字段，退出码、
+  stdout 和 stderr 则分别标记，保留的代表值仍按普通内容展示。
 - 虚线节点表示解析器发现了对应语法，但没有模拟路径执行到该节点。
 - AST 节点每次被真实控制流访问时都会重新高亮，因此循环头和循环体语句会在每轮
   再次激活；执行次数会累计，检查器保留并明确标注最新一次上下文。Runtime 会把
@@ -105,12 +107,14 @@ Handler 可以读取 `invocation.name`、类型化的 `invocation.args`、
 Playground 会把命令检测注册表安装为一层 Builder Middleware，因此匹配的 Builtin、
 用户 Handler 和 fallback 都会进入分析，无需分别包装。检测返回值会被丢弃；分类为
 风险的错误只用于记录，不会中断模拟，最终结果或错误仍以实际选中的命令为准。命中
-的 AST 节点和对应 Runtime occurrence 会显示红色边框，选中节点即可在检查器中查看
-稳定的风险 `Type` 和完整检测错误。默认注册表覆盖 `rm`/`find` 根目录级删除、系统关机或重启、
+的 AST 节点和对应 Runtime occurrence 会在检测发生时立即显示红色边框，选中节点即可
+在检查器中查看稳定的风险 `Type` 和完整检测错误。默认注册表覆盖 `rm`/`find` 根目录级删除、系统关机或重启、
 `mkfs*`/`wipefs`/`dd` 块设备写入、把网络通道连接到 Shell 的 netcat 或 `socat`
 模式、输入连接到具体 `/dev/tcp` 或 `/dev/udp` 端点的交互式 Shell，以及同时建立
-Socket、接管进程流并启动 Shell 的高置信 Python 或 Perl Payload；普通文件写入、
-单独的网络客户端或网络重定向、本地解释器程序和本地 Shell 管道不会被归类为风险。
+Socket、接管进程流并启动 Shell 的高置信 Python 或 Perl Payload、将交互式 Shell
+通过文件反馈回路接入 netcat 的管道，以及从本地文件或 stdin 读取上传数据的 `curl`
+请求；普通 `curl` 请求、下载、内联请求数据、普通文件写入、其他单独的网络客户端
+或网络重定向、本地解释器程序和不含反馈回路的本地 Shell 管道不会被归类为风险。
 
 JavaScript Handler 只会在运行 WebAssembly 模拟器的同一个一次性浏览器 Worker
 中执行。它不能执行 Server 或宿主机命令；浏览器超时会通过替换 Worker 终止无限

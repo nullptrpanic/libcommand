@@ -15,11 +15,10 @@ func executeIonice(_ context.Context, shell *runtime.CommandContext, invocation 
 	index := 0
 	identifierMode := false
 	for index < len(invocation.Args) {
-		argument := invocation.Args[index]
-		if argument.Kind != runtime.ArgumentString {
-			return unresolvedWrapperArgument(shell, invocation.Name)
+		value, ok := wrapperArgument(invocation, index)
+		if !ok {
+			return unresolvedWrapper()
 		}
-		value := argument.Value
 		if value == "--" {
 			index++
 			break
@@ -29,15 +28,15 @@ func executeIonice(_ context.Context, shell *runtime.CommandContext, invocation 
 		}
 		if value == "-p" || value == "--pid" || value == "-P" || value == "--pgid" || value == "-u" || value == "--uid" {
 			identifierMode = true
-			if index+1 >= len(invocation.Args) || invocation.Args[index+1].Kind != runtime.ArgumentString {
-				return unresolvedWrapperArgument(shell, invocation.Name)
+			if _, ok := wrapperArgument(invocation, index+1); !ok {
+				return unresolvedWrapper()
 			}
 			index += 2
 			continue
 		}
 		if value == "-c" || value == "--class" || value == "-n" || value == "--classdata" {
-			if index+1 >= len(invocation.Args) || invocation.Args[index+1].Kind != runtime.ArgumentString {
-				return unresolvedWrapperArgument(shell, invocation.Name)
+			if _, ok := wrapperArgument(invocation, index+1); !ok {
+				return unresolvedWrapper()
 			}
 			index += 2
 			continue
@@ -50,7 +49,7 @@ func executeIonice(_ context.Context, shell *runtime.CommandContext, invocation 
 			index++
 			continue
 		}
-		return unsupportedWrapperOption(shell, invocation.Name, value)
+		return unresolvedWrapper()
 	}
 	if identifierMode {
 		return shell.StopUnresolved("ionice identifier mode does not execute a nested command"), nil

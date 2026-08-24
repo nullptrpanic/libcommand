@@ -103,7 +103,9 @@ the isolated virtual filesystem; relative file paths resolve against
 `WorkingDir` keeps the existing `/` default, while a relative value is resolved
 from `/`. During redirection evaluation, reading a missing file materializes a
 concrete empty file, while writing a missing file creates its required parent
-directories in the VFS. Known file/directory conflicts remain errors.
+directories in the VFS. A missing file operand passed to `cat` instead makes
+its stdout, stderr, and exit status unresolved. Known file/directory conflicts
+remain errors.
 `SimulationRequest.User` initializes the simulated current user and
 defaults to `"user"`; it does not synthesize or rewrite `USER`, `LOGNAME`,
 `HOME`, `UID`, or `EUID`. The script name exposed as `$0` is `command.sh`.
@@ -342,7 +344,10 @@ in-process helpers:
 | Conditions and traps | `test`, `[`, `trap`, `type` |
 | Dispatch and dynamic execution | `command`, `builtin`, `env`, `exec`, `eval`, `source`, `.`, `bash`, `sh` |
 | External execution wrappers | `sudo`, `setsid`, `nohup`, `timeout`, `nice`, `stdbuf`, `taskset`, `ionice`, `chrt` |
-| Simulated utilities | integer `seq`, stdin-based `base64`, and line-based `rev` |
+| Simulated utilities | virtual-file `cat` and `rm`, integer `seq`, stdin-based `base64`, and line-based `rev` |
+
+`cat` and `rm` access only the isolated virtual filesystem; they never read or
+modify host files. Caller registrations can override every default command.
 
 Execution wrappers parse their supported command-line forms and redispatch the
 nested executable through the same registry and middleware chain. They do not
@@ -422,6 +427,8 @@ runtime path construction:
 - `Directory` and `ChangeDirectory`
 - `User`, plus command-scoped `CommandContext.ChangeUser`; a changed user is
   inherited by nested declarative execution and restored on every returned path
+- `PathID` and `Parent`, which expose the current execution-path identity and
+  the frozen state snapshot from which it forked; tracing reports the same IDs
 - `Variable`, `SetVariable`, and `UnsetVariable`
 - `Redirects`, containing the expanded targets and operators active for the
   call; virtual file targets are absolute paths and unknown targets set
@@ -430,8 +437,9 @@ runtime path construction:
   operations exposed by `CommandContext`
 
 State mutations are path-local, copy-on-write, and checked against the logical
-materialization budget. Commands must not retain `CommandContext` or `State`
-pointers after returning. Input byte slices returned by `Input` or
+materialization budget. A parent snapshot is immutable and its retained state
+is included in that budget. Commands must not retain `CommandContext` or
+`State` pointers after returning. Input byte slices returned by `Input` or
 `ConsumeInput` are caller-owned copies, and `SetInput` also copies its input,
 so a command cannot mutate another retained path through a shared buffer.
 
@@ -440,7 +448,7 @@ Result behavior is explicit:
 | Return | Meaning |
 | --- | --- |
 | Non-nil result, nil error | Apply stdout, stderr, exit code, action, or a declarative operation. |
-| `&CommandResult{Unresolved: true}`, nil error | Output streams and exit status are unknown. |
+| `command.UnresolvedResult()`, nil error | Output streams and exit status are unknown. |
 | Nil result, nil error | Decline the invocation and use unresolved-command behavior. |
 | Non-nil error | Abort simulation and return the error. |
 | `CommandStop` | Terminate all active and pending paths successfully. |
@@ -459,6 +467,7 @@ simulator := libcommand.NewBuilder().
 	Command("rm", analysis.RM).
 	Command("poweroff", analysis.Poweroff).
 	Command("nc", analysis.NC).
+	Command("curl", analysis.Curl).
 	Build()
 
 err := simulator.Simulate(ctx, request)
@@ -472,17 +481,21 @@ power-control commands, block-device writes through `mkfs*`, `wipefs`, or
 `dd`, netcat or `socat` modes that attach a network channel to a Shell,
 interactive Shells whose input is connected to a concrete `/dev/tcp` or
 `/dev/udp` endpoint, and high-confidence Python or Perl socket payloads that
-attach process streams and launch a Shell. Ordinary file writes, standalone
-network clients or redirections, local interpreter programs, and local
-Shell pipelines are intentionally not classified as risks. A detection is returned as
+attach process streams and launch a Shell. `Curl` reports uploads whose payload
+is read from a local file or stdin through upload, data, JSON, or multipart-form
+options; ordinary requests, downloads, and inline request data are not reported.
+Ordinary file writes, other standalone network clients or redirections, local
+interpreter programs, and local Shell pipelines are intentionally not classified as risks. A detection is returned as
 `*analysis.DetectionError`, whose `Type` is one of `reverse_shell`,
 `destructive_operation`, `sensitive_information_disclosure`, or
 `data_exfiltration`, and is propagated by `Simulate`. Inconclusive or unresolved
 input is treated as safe and retains unresolved-command behavior.
-Registration uses exact expanded command names, so `/bin/rm` must be
-registered separately if required. Nested decoded source still returns
-through normal dispatch: registering only `analysis.RM` detects `rm -rf /`
-decoded by `base64 -d | sh`.
+Direct command registration uses exact expanded names, so `/bin/rm` must be
+registered separately if required. Middleware that enables the complete
+detector set can call `analysis.Lookup(invocation.Name)`; it resolves executable
+paths plus `mkfs.*` and versioned Python names from the same registry. Nested
+decoded source still returns through normal dispatch: registering only
+`analysis.RM` detects `rm -rf /` decoded by `base64 -d | sh`.
 
 ## Resource model
 

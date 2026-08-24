@@ -9,7 +9,7 @@ import (
 
 func TestDefaultRegistry(t *testing.T) {
 	commands := Definitions()
-	if commands["seq"] == nil || commands["*"] == nil || commands["missing"] != nil {
+	if commands["cat"] == nil || commands["rm"] == nil || commands["seq"] == nil || commands["*"] == nil || commands["missing"] != nil {
 		t.Fatalf("definitions = %#v", commands)
 	}
 	delete(commands, "seq")
@@ -21,12 +21,12 @@ func TestDefaultRegistry(t *testing.T) {
 func TestDefaultRegistryOwnsEveryRoutedCallCommand(t *testing.T) {
 	commands := Definitions()
 	for _, name := range []string{
-		"*", ":", "[", ".", "alias", "base64", "bash", "bind",
+		"*", ":", "[", ".", "alias", "base64", "bash", "bind", "cat",
 		"builtin", "caller", "cd", "command", "compgen", "complete", "compopt",
 		"declare", "dirs", "disown", "echo", "enable", "env", "eval",
 		"exec", "export", "false", "fc", "getopts", "hash", "help",
 		"history", "jobs", "kill", "let", "local", "logout", "mapfile", "popd",
-		"printf", "pushd", "pwd", "read", "readarray", "readonly", "rev",
+		"printf", "pushd", "pwd", "read", "readarray", "readonly", "rev", "rm",
 		"seq", "set", "sh", "shift", "shopt", "source", "suspend", "test", "times",
 		"trap", "true", "type", "typeset", "ulimit", "umask", "unalias", "unset",
 		"wait",
@@ -62,7 +62,7 @@ func TestDefaultFallbackIsUnresolved(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result == nil || !result.Unresolved {
+	if !result.AllUnresolved() {
 		t.Fatalf("fallback result = %#v, want unresolved", result)
 	}
 }

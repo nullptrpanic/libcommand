@@ -2,6 +2,36 @@ export function buildFlowModel(response = {}) {
   return buildASTFlowModel(response);
 }
 
+export function argumentPresentation(argument = {}) {
+  const unresolved = Number(argument.kind) !== 0;
+  return {
+    value: unresolved ? "UNRESOLVED" : String(argument.value || ""),
+    unresolved,
+  };
+}
+
+export function visibleResultFields(result = {}) {
+  const exitCodeUnresolved = Boolean(result.exitCodeUnresolved);
+  const fields = [{
+    label: "Exit code",
+    value: exitCodeUnresolved ? "" : String(result.exitCode ?? 0),
+    wide: false,
+    unresolved: exitCodeUnresolved,
+  }];
+  if (result.error) fields.push({ label: "Error", value: result.error, wide: false, unresolved: false });
+  if (result.stdout || result.stdoutUnresolved) {
+    fields.push({ label: "Stdout", value: result.stdout || "", wide: true, unresolved: Boolean(result.stdoutUnresolved) });
+  }
+  if (result.stderr || result.stderrUnresolved) {
+    fields.push({ label: "Stderr", value: result.stderr || "", wide: true, unresolved: Boolean(result.stderrUnresolved) });
+  }
+  return fields;
+}
+
+export function commandResultUnresolved(result) {
+  return Boolean(result?.stdoutUnresolved && result?.stderrUnresolved && result?.exitCodeUnresolved);
+}
+
 export function buildFlowModels(response = {}) {
   return {
     ast: buildASTFlowModel(response),
@@ -379,7 +409,7 @@ export function createASTFlowModel(initialDefinitions = []) {
         if (!node) break;
         node.commandResult = event.commandResult || node.commandResult;
         node.error = event.error || "";
-        if (event.commandResult?.unresolved) node.state = "unresolved";
+        if (commandResultUnresolved(event.commandResult)) node.state = "unresolved";
         updateNode(node, event);
         changed = true;
         break;
@@ -415,9 +445,13 @@ export function createASTFlowModel(initialDefinitions = []) {
     return model;
   }
 
+  function appendDetection(detection) {
+    return attachDetection(visibleSyntaxNode(detection?.nodeId), detection);
+  }
+
   addDefinitions([...initialDefinitions].sort((left, right) => left.id - right.id));
   ensureTopology();
-  return { model, append, finish };
+  return { model, append, appendDetection, finish };
 }
 
 function transitionKey(fromNodeID, toNodeID) {
@@ -638,6 +672,7 @@ export function createRuntimeFlowModel(nodes = []) {
   const callStacks = new Map();
   const lastByPath = new Map();
   const nextEdgeUnresolved = new Set();
+  const pendingDetections = new Map();
   const paths = new Set();
 
   function appendOccurrence(event, definition, overrides = {}) {
@@ -665,8 +700,22 @@ export function createRuntimeFlowModel(nodes = []) {
     };
     model.nodes.push(occurrence);
     nodeByID.set(occurrence.id, occurrence);
+    for (const detection of pendingDetections.get(event.sequence) || []) {
+      attachDetection(occurrence, detection);
+    }
+    pendingDetections.delete(event.sequence);
     appendExecutionEdge(model.edges, lastByPath, nextEdgeUnresolved, occurrence, event);
     return occurrence;
+  }
+
+  function appendDetection(detection) {
+    const occurrence = nodeByID.get(`runtime:${detection?.sequence}`);
+    if (occurrence) return attachDetection(occurrence, detection);
+    if (!detection?.sequence) return false;
+    const pending = pendingDetections.get(detection.sequence) || [];
+    if (!pending.some((item) => sameDetection(item, detection))) pending.push(detection);
+    pendingDetections.set(detection.sequence, pending);
+    return false;
   }
 
   function append(event = {}) {
@@ -705,7 +754,7 @@ export function createRuntimeFlowModel(nodes = []) {
           occurrence.memory = event.memory || occurrence.memory;
           occurrence.steps = event.steps || occurrence.steps;
           occurrence.error = event.error || "";
-          if (event.commandResult?.unresolved) occurrence.state = "unresolved";
+          if (commandResultUnresolved(event.commandResult)) occurrence.state = "unresolved";
           changed = true;
         }
         break;
@@ -760,8 +809,23 @@ export function createRuntimeFlowModel(nodes = []) {
   return {
     model,
     append,
+    appendDetection,
     finish,
   };
+}
+
+function attachDetection(node, detection) {
+  if (!node || !detection || node.detections.some((item) => sameDetection(item, detection))) return false;
+  node.detections.push(detection);
+  return true;
+}
+
+function sameDetection(left, right) {
+  return left.sequence === right.sequence
+    && left.nodeId === right.nodeId
+    && left.pathId === right.pathId
+    && left.command === right.command
+    && left.type === right.type;
 }
 
 export function advanceRuntimeFlow(runtime, events, start) {
@@ -837,12 +901,12 @@ function runtimeContainerCommand(name) {
   return name === "eval" || name === "source" || name === ".";
 }
 
-function invocationText(invocation) {
+export function invocationText(invocation) {
   return [invocation.name, ...(invocation.args || []).map(formatInvocationArgument)].filter(Boolean).join(" ");
 }
 
 function formatInvocationArgument(argument) {
-  if (!argument || Number(argument.kind) !== 0) return "<unresolved>";
+  if (!argument || Number(argument.kind) !== 0) return "";
   const value = String(argument.value || "");
   if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(value)) return value;
   return JSON.stringify(value);

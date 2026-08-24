@@ -5,8 +5,6 @@ package main
 import (
 	"encoding/json"
 	"syscall/js"
-
-	"github.com/nullptrpanic/libcommand"
 )
 
 func main() {
@@ -18,22 +16,22 @@ func main() {
 	})
 	analyzeFunction := js.FuncOf(func(_ js.Value, arguments []js.Value) any {
 		if len(arguments) < 1 || len(arguments) > 2 || arguments[0].Type() != js.TypeString {
-			return `{"error":"libcommandAnalyze expects a JSON string and optional trace callback"}`
+			return `{"error":"libcommandAnalyze expects a JSON string and optional stream callback"}`
 		}
-		var stream func(*libcommand.TraceEvent)
+		var stream func(*playgroundStreamItem)
 		if len(arguments) == 2 {
 			if arguments[1].Type() != js.TypeFunction {
-				return `{"error":"libcommandAnalyze trace callback must be a function"}`
+				return `{"error":"libcommandAnalyze stream callback must be a function"}`
 			}
 			callback := arguments[1]
-			stream = func(event *libcommand.TraceEvent) {
-				encoded, err := json.Marshal(event)
+			stream = func(item *playgroundStreamItem) {
+				encoded, err := json.Marshal(item)
 				if err == nil {
 					callback.Invoke(string(encoded))
 				}
 			}
 		}
-		return analyzeJSONWithTrace(arguments[0].String(), stream)
+		return analyzeJSONWithStream(arguments[0].String(), stream)
 	})
 	js.Global().Set("libcommandParse", parseFunction)
 	js.Global().Set("libcommandAnalyze", analyzeFunction)

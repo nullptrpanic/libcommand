@@ -83,7 +83,7 @@ func TestBase64ReportsUnresolvedArgumentsExplicitly(t *testing.T) {
 		Name: "base64",
 		Args: []*runtime.Argument{{Kind: runtime.ArgumentUnresolved}},
 	}, 2<<20)
-	if err != nil || result == nil || !result.Unresolved {
+	if err != nil || !result.AllUnresolved() {
 		t.Fatalf("result = %#v, error = %v", result, err)
 	}
 }

@@ -14,11 +14,10 @@ func init() {
 func executeTimeout(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	index := 0
 	for index < len(invocation.Args) {
-		argument := invocation.Args[index]
-		if argument.Kind != runtime.ArgumentString {
-			return unresolvedWrapperArgument(shell, invocation.Name)
+		value, ok := wrapperArgument(invocation, index)
+		if !ok {
+			return unresolvedWrapper()
 		}
-		value := argument.Value
 		if value == "--" {
 			index++
 			break
@@ -31,8 +30,8 @@ func executeTimeout(_ context.Context, shell *runtime.CommandContext, invocation
 			continue
 		}
 		if value == "-s" || value == "--signal" || value == "-k" || value == "--kill-after" {
-			if index+1 >= len(invocation.Args) || invocation.Args[index+1].Kind != runtime.ArgumentString {
-				return unresolvedWrapperArgument(shell, invocation.Name)
+			if _, ok := wrapperArgument(invocation, index+1); !ok {
+				return unresolvedWrapper()
 			}
 			index += 2
 			continue
@@ -41,10 +40,10 @@ func executeTimeout(_ context.Context, shell *runtime.CommandContext, invocation
 			index++
 			continue
 		}
-		return unsupportedWrapperOption(shell, invocation.Name, value)
+		return unresolvedWrapper()
 	}
-	if index >= len(invocation.Args) || invocation.Args[index].Kind != runtime.ArgumentString {
-		return unresolvedWrapperArgument(shell, invocation.Name)
+	if _, ok := wrapperArgument(invocation, index); !ok {
+		return unresolvedWrapper()
 	}
 	return invokeExternalWrapper(shell, invocation, index+1, nil)
 }

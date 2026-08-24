@@ -1648,6 +1648,121 @@ lark-cli "$encoded" "$decoded"`
 	}
 }
 
+func TestSimulatorReadsVirtualFilesThroughCat(t *testing.T) {
+	source := `echo 'rm -rf /' > ./test.txt
+x=$(cat ./test.txt | base64)
+lark-cli "$x"`
+	requireJoinedArguments(t, source, []string{"cm0gLXJmIC8K"})
+}
+
+func TestSimulatorCatMarksMissingVirtualFileUnresolved(t *testing.T) {
+	var result *TraceCommandResult
+	simulator := NewBuilder().Build()
+	err := simulator.SimulateTrace(context.Background(), &SimulationRequest{Source: `cat ./missing`}, func(event *TraceEvent) bool {
+		if event.Kind == TraceCommandFinished && event.Node != nil && event.Node.Snippet == "cat ./missing" {
+			result = event.CommandResult
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.StdoutUnresolved || !result.StderrUnresolved || !result.ExitCodeUnresolved {
+		t.Fatalf("cat result = %#v, want stdout, stderr, and exit code unresolved", result)
+	}
+}
+
+func TestSimulatorExploresArithmeticBranchesFromMissingCat(t *testing.T) {
+	var calls []string
+	simulator := mustBuildSimulator(t, "lark-cli", recordFirstArgument(t, &calls))
+	source := `x=$(cat ./test.txt)
+if (( $x == 1 )); then lark-cli 'path 1'; else lark-cli 'path 2'; fi`
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {
+		t.Fatal(err)
+	}
+	branches := make(map[string]int)
+	for _, call := range calls {
+		branches[call]++
+	}
+	if !reflect.DeepEqual(branches, map[string]int{"path 1": 1, "path 2": 1}) {
+		t.Fatalf("branches = %#v, want both arithmetic branches", branches)
+	}
+}
+
+func TestSimulatorCatConsumesStdin(t *testing.T) {
+	var got []string
+	simulator := mustBuildSimulator(t, "lark-cli", recordJoinedArguments(t, &got))
+	err := simulator.Simulate(context.Background(), &SimulationRequest{
+		Source: `cat >/dev/null
+read value
+lark-cli "$?" "$value"`,
+		Stdin: []byte("payload\n"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"1 "}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestSimulatorRMRemovesVirtualRootContents(t *testing.T) {
+	var got []string
+	simulator := mustBuildSimulator(t, "lark-cli", recordJoinedArguments(t, &got))
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{
+		Source: `echo secret > /tree/nested/file
+rm -rf /
+if [[ -e /tree/nested/file ]]; then
+  lark-cli exists
+else
+  lark-cli missing
+fi`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"missing"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestSimulatorRMRequiresRecursiveForVirtualDirectory(t *testing.T) {
+	var got []string
+	simulator := mustBuildSimulator(t, "lark-cli", recordJoinedArguments(t, &got))
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{
+		Source: `echo secret > /tree/file
+rm /tree
+lark-cli "$?"
+if [[ -e /tree/file ]]; then lark-cli exists; fi`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"1", "exists"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %#v, want %#v", got, want)
+	}
+}
+
+func TestSimulatorRMDoesNotResolveRelativeTargetFromUnknownDirectory(t *testing.T) {
+	var got []string
+	simulator := NewBuilder().
+		Command("unknown-dir", func(_ context.Context, shell *CommandContext, _ *Invocation) (*CommandResult, error) {
+			shell.SetDirectory("/", true)
+			return &CommandResult{}, nil
+		}).
+		Command("lark-cli", recordJoinedArguments(t, &got)).
+		Build()
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{
+		Source: `echo secret > /tree/file
+unknown-dir
+rm -rf tree
+if [[ -e /tree/file ]]; then lark-cli exists; else lark-cli missing; fi`,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"exists"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("calls = %#v, want %#v", got, want)
+	}
+}
+
 func TestSimulatorKeepsBase64OutputUnresolvedForUnknownStdin(t *testing.T) {
 	var got []*Argument
 	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {

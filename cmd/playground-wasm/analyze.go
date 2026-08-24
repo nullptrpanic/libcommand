@@ -66,6 +66,12 @@ type playgroundResponse struct {
 	Error            string                   `json:"error,omitempty"`
 }
 
+type playgroundStreamItem struct {
+	Type      string                 `json:"type"`
+	Event     *libcommand.TraceEvent `json:"event,omitempty"`
+	Detection *playgroundDetection   `json:"detection,omitempty"`
+}
+
 type playgroundPathOutput struct {
 	PathID    uint64                      `json:"pathId"`
 	Status    libcommand.TracePathStatus  `json:"status"`
@@ -74,7 +80,7 @@ type playgroundPathOutput struct {
 }
 
 func analyzeJSON(encoded string) string {
-	return analyzeJSONWithTrace(encoded, nil)
+	return analyzeJSONWithStream(encoded, nil)
 }
 
 func parseSourceJSON(encoded string) string {
@@ -94,7 +100,7 @@ func parseSourceJSON(encoded string) string {
 	return encodePlaygroundResponse(&playgroundResponse{Nodes: nodes, ASTNodeCount: len(nodes)})
 }
 
-func analyzeJSONWithTrace(encoded string, stream func(*libcommand.TraceEvent)) string {
+func analyzeJSONWithStream(encoded string, stream func(*playgroundStreamItem)) string {
 	if len(encoded) > maximumPlaygroundRequestBytes {
 		return encodePlaygroundResponse(&playgroundResponse{
 			Error: fmt.Sprintf("playground request exceeds %d bytes", maximumPlaygroundRequestBytes),
@@ -107,7 +113,7 @@ func analyzeJSONWithTrace(encoded string, stream func(*libcommand.TraceEvent)) s
 	if err := validatePlaygroundRequest(request); err != nil {
 		return encodePlaygroundResponse(&playgroundResponse{Error: err.Error()})
 	}
-	return encodePlaygroundResponse(analyzeWithTrace(request, maximumTraceEvents, stream))
+	return encodePlaygroundResponse(analyzeWithStream(request, maximumTraceEvents, stream))
 }
 
 func validatePlaygroundRequest(request *playgroundRequest) error {
@@ -139,14 +145,10 @@ func validatePlaygroundRequest(request *playgroundRequest) error {
 	return nil
 }
 
-func analyze(request *playgroundRequest, maximumEvents int) *playgroundResponse {
-	return analyzeWithTrace(request, maximumEvents, nil)
-}
-
-func analyzeWithTrace(request *playgroundRequest, maximumEvents int, stream func(*libcommand.TraceEvent)) *playgroundResponse {
+func analyzeWithStream(request *playgroundRequest, maximumEvents int, stream func(*playgroundStreamItem)) *playgroundResponse {
 	started := time.Now()
 	response := &playgroundResponse{}
-	analyzer := newPlaygroundAnalyzer()
+	analyzer := newPlaygroundAnalyzer(stream)
 	wildcardConfigured := false
 	builder := libcommand.NewBuilder().Limits(&libcommand.Limits{
 		MaxExecutionSteps: request.MaxExecutionSteps,
@@ -170,8 +172,8 @@ func analyzeWithTrace(request *playgroundRequest, maximumEvents int, stream func
 		})
 	}
 	if !wildcardConfigured {
-		builder.Command("*", func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return &libcommand.CommandResult{Unresolved: true}, nil
+		builder.Command("*", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return command.UnresolvedResult(), nil
 		})
 	}
 
@@ -218,7 +220,7 @@ func analyzeWithTrace(request *playgroundRequest, maximumEvents int, stream func
 			}
 		}
 		if stream != nil {
-			stream(displayEvent)
+			stream(&playgroundStreamItem{Type: "trace", Event: displayEvent})
 		}
 		if event.Memory != nil && event.Memory.AggregateBytes > response.PeakLogicalBytes {
 			response.PeakLogicalBytes = event.Memory.AggregateBytes

@@ -15,11 +15,10 @@ func executeTaskset(_ context.Context, shell *runtime.CommandContext, invocation
 	index := 0
 	pidMode := false
 	for index < len(invocation.Args) {
-		argument := invocation.Args[index]
-		if argument.Kind != runtime.ArgumentString {
-			return unresolvedWrapperArgument(shell, invocation.Name)
+		value, ok := wrapperArgument(invocation, index)
+		if !ok {
+			return unresolvedWrapper()
 		}
-		value := argument.Value
 		if value == "--" {
 			index++
 			break
@@ -34,13 +33,13 @@ func executeTaskset(_ context.Context, shell *runtime.CommandContext, invocation
 			index++
 			continue
 		}
-		return unsupportedWrapperOption(shell, invocation.Name, value)
+		return unresolvedWrapper()
 	}
 	if pidMode {
 		return shell.StopUnresolved("taskset PID mode does not execute a nested command"), nil
 	}
-	if index >= len(invocation.Args) || invocation.Args[index].Kind != runtime.ArgumentString {
-		return unresolvedWrapperArgument(shell, invocation.Name)
+	if _, ok := wrapperArgument(invocation, index); !ok {
+		return unresolvedWrapper()
 	}
 	return invokeExternalWrapper(shell, invocation, index+1, nil)
 }

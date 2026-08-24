@@ -56,22 +56,13 @@ func (c *CommandContext) applyResult(result *CommandResult) ([]*pathResult, erro
 }
 
 func (c *CommandContext) applyOrdinaryResult(result *CommandResult) ([]*pathResult, error) {
-	stdoutUnknown := false
-	stderrUnknown := false
-	exitUnknown := false
-	preserveExit := false
-	if result != nil {
-		stdoutUnknown = result.stdoutUnknown
-		stderrUnknown = result.stderrUnknown
-		exitUnknown = result.exitUnknown
-		preserveExit = result.preserveExit
+	if result == nil {
+		result = NewUnresolvedResult()
 	}
-	if result == nil || result.Unresolved {
-		result = &CommandResult{}
-		stdoutUnknown = true
-		stderrUnknown = true
-		exitUnknown = true
-	}
+	stdoutUnknown := result.stdoutUnknown
+	stderrUnknown := result.stderrUnknown
+	exitUnknown := result.exitUnknown
+	preserveExit := result.preserveExit
 	if !preserveExit {
 		if exitUnknown {
 			c.state.setUnknownExitCode()

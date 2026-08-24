@@ -149,7 +149,10 @@ func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, l
 	active := []*pathResult{{state: s, status: StatusCompleted}}
 	completed := make([]*pathResult, 0)
 	if zeroIteration {
-		completed = append(completed, &pathResult{state: s.clone(), status: StatusCompleted})
+		zeroPath := &pathResult{state: s.clone(), status: StatusCompleted}
+		e.ensurePathID(s)
+		e.assignSuccessorPaths(s, e.trace.currentNodeID(s), []*pathResult{zeroPath, active[0]})
+		completed = append(completed, zeroPath)
 	}
 	for itemIndex, item := range items {
 		bodyInputs := make([]*pathResult, 0, len(active))
@@ -256,7 +259,10 @@ func (e *ExecutionContext) evaluateArithmeticFor(s *State, clause *syntax.ForCla
 					}
 					path.state.vars = originalVars.clone()
 					exitPath := path.state.clone()
-					completed = append(completed, &pathResult{state: exitPath, status: StatusCompleted})
+					exitResult := &pathResult{state: exitPath, status: StatusCompleted}
+					e.ensurePathID(path.state)
+					e.assignSuccessorPaths(path.state, e.trace.currentNodeID(path.state), []*pathResult{exitResult, path})
+					completed = append(completed, exitResult)
 					bodyInputs = append(bodyInputs, path)
 					continue
 				}
@@ -355,34 +361,45 @@ func (e *ExecutionContext) evaluateSelect(s *State, clause *syntax.ForClause, lo
 				if err := e.checkRepeatedPathMaterialization(current, len(items)+2, sourceLocation(clause)); err != nil {
 					return append(completed, current), err
 				}
+				e.ensurePathID(current.state)
+				parentState := e.freezeParentState(current.state)
+				nodeID := e.trace.currentNodeID(current.state)
+				alternatives := make([]*pathResult, 0, len(items)+2)
 				eof := current.state.clone()
 				eof.stdin = newCertain[[]byte](nil)
 				eofStatus := e.finishSelectInput(eof, sourceLocation(clause))
-				completed = append(completed, &pathResult{state: eof, status: eofStatus})
+				eofPath := &pathResult{state: eof, status: eofStatus}
+				alternatives = append(alternatives, eofPath)
+				completed = append(completed, eofPath)
 				for index, item := range items {
 					choice := current.state.clone()
 					choice.stdin = newCertain[[]byte](nil)
 					replyAssigned, status := e.assignSelectVariable(choice, "REPLY", expand.Variable{Set: true, Kind: expand.String, Str: strconv.Itoa(index + 1)}, sourceLocation(clause))
+					choicePath := &pathResult{state: choice, status: status}
+					alternatives = append(alternatives, choicePath)
 					if status != StatusCompleted {
-						completed = append(completed, &pathResult{state: choice, status: status})
+						completed = append(completed, choicePath)
 						continue
 					}
 					if !replyAssigned {
 						item = ""
 					}
 					_, _ = e.assignSelectVariable(choice, loop.Name.Value, expand.Variable{Set: true, Kind: expand.String, Str: item}, sourceLocation(clause))
-					bodyInputs = append(bodyInputs, &pathResult{state: choice, status: StatusCompleted})
+					bodyInputs = append(bodyInputs, choicePath)
 				}
 				current.state.stdin = newCertain[[]byte](nil)
 				// A non-empty, non-numeric representative covers Bash's invalid-input branch.
 				_, status := e.assignSelectVariable(current.state, "REPLY", expand.Variable{Set: true, Kind: expand.String, Str: "?"}, sourceLocation(clause))
+				alternatives = append(alternatives, current)
 				if status != StatusCompleted {
 					current.status = status
 					completed = append(completed, current)
+					e.assignSuccessorPaths(parentState, nodeID, alternatives)
 					continue
 				}
 				_, _ = e.assignSelectVariable(current.state, loop.Name.Value, expand.Variable{Set: true, Kind: expand.String}, sourceLocation(clause))
 				bodyInputs = append(bodyInputs, current)
+				e.assignSuccessorPaths(parentState, nodeID, alternatives)
 				continue
 			}
 

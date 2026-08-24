@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"context"
 	"strings"
 	"testing"
 )
@@ -43,6 +44,26 @@ func TestMemoryFSCertaintyCopyOnWrite(t *testing.T) {
 	}
 	if contents, unknown := fs.readValue("/file"); string(contents) != "representative" || !unknown {
 		t.Fatalf("source after clone write = %q, %t", contents, unknown)
+	}
+}
+
+func TestMemoryFSRemoveTreeUsesCopyOnWrite(t *testing.T) {
+	fs := newMemoryFS(defaultMaxMemoryBytes)
+	if err := fs.writeWithParents("/tree/nested/file", []byte("content"), false); err != nil {
+		t.Fatal(err)
+	}
+	clone := fs.clone()
+	if err := clone.remove(context.Background(), "/tree", true); err != nil {
+		t.Fatal(err)
+	}
+	if clone.pathKind("/tree") != PathMissing || clone.pathKind("/tree/nested/file") != PathMissing {
+		t.Fatalf("clone dirs = %#v, files = %#v", clone.dirs, clone.files)
+	}
+	if fs.pathKind("/tree/nested/file") != PathFile {
+		t.Fatal("removing from clone changed source filesystem")
+	}
+	if clone.materializedBytes != 0 {
+		t.Fatalf("clone materialized bytes = %d, want 0", clone.materializedBytes)
 	}
 }
 

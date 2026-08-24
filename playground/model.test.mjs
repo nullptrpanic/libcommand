@@ -4,6 +4,7 @@ import * as playgroundModel from "./model.js";
 
 import {
   advanceRuntimeFlow,
+  argumentPresentation,
   buildFlowModel,
   buildFlowModels,
   createASTFlowModel,
@@ -13,12 +14,33 @@ import {
   layoutASTFlowGraph,
   layoutFlowGraph,
   liveControlView,
+  invocationText,
   nodeOutput,
   normalizeCommands,
   executionOccurrenceLabel,
   parseEnvironment,
   tokenizeBash,
 } from "./model.js";
+
+test("unresolved arguments use the same chip content contract as concrete arguments", () => {
+  assert.deepEqual(argumentPresentation({ kind: 1, value: "representative" }), {
+    value: "UNRESOLVED",
+    unresolved: true,
+  });
+  assert.deepEqual(argumentPresentation({ kind: 0, value: "known" }), {
+    value: "known",
+    unresolved: false,
+  });
+});
+
+test("unresolved invocation input is omitted from the flow label", () => {
+  const invocation = {
+    name: "echo",
+    args: [{ kind: 1, value: "representative" }],
+  };
+
+  assert.equal(invocationText(invocation), "echo");
+});
 
 test("live controls distinguish idle running and paused sessions", () => {
   assert.deepEqual(liveControlView(false, false), {
@@ -39,6 +61,35 @@ test("live controls distinguish idle running and paused sessions", () => {
     running: true,
     stopVisible: true,
   });
+});
+
+test("result presentation marks only unresolved dimensions and retains empty unresolved streams", () => {
+  assert.equal(typeof playgroundModel.visibleResultFields, "function");
+  assert.deepEqual(playgroundModel.visibleResultFields({
+    exitCode: 0,
+    exitCodeUnresolved: true,
+    stdout: "",
+    stdoutUnresolved: true,
+    stderr: "",
+    stderrUnresolved: false,
+    error: "",
+  }), [
+    { label: "Exit code", value: "", wide: false, unresolved: true },
+    { label: "Stdout", value: "", wide: true, unresolved: true },
+  ]);
+  assert.deepEqual(playgroundModel.visibleResultFields({
+    exitCode: 1,
+    stdout: "representative output\n",
+    stdoutUnresolved: true,
+    stderr: "representative error\n",
+    stderrUnresolved: false,
+    error: "simulation failed",
+  }), [
+    { label: "Exit code", value: "1", wide: false, unresolved: false },
+    { label: "Error", value: "simulation failed", wide: false, unresolved: false },
+    { label: "Stdout", value: "representative output\n", wide: true, unresolved: true },
+    { label: "Stderr", value: "representative error\n", wide: true, unresolved: false },
+  ]);
 });
 
 test("runtime flow grows only when command events arrive", () => {
@@ -713,12 +764,36 @@ test("runtime flow marks an unregistered command unresolved", () => {
     nodes: [node(1, 0, "command", "external-command value")],
     events: [
       commandStarted(1, 1, "external-command", [{ kind: 0, value: "value" }]),
-      commandFinished(2, 1, { unresolved: true, exitCodeUnresolved: true }),
+      commandFinished(2, 1, {
+        unresolved: true,
+        stdoutUnresolved: true,
+        stderrUnresolved: true,
+        exitCodeUnresolved: true,
+      }),
     ],
   });
 
+  assert.equal(models.ast.nodes[0].state, "unresolved");
   assert.equal(models.runtime.nodes.length, 1);
   assert.equal(models.runtime.nodes[0].state, "unresolved");
+});
+
+test("partial unresolved output does not mark the command node unresolved", () => {
+  const models = buildFlowModels({
+    nodes: [node(1, 0, "command", "echo unresolved-value")],
+    events: [
+      commandStarted(1, 1, "echo", [{ kind: 1 }]),
+      commandFinished(2, 1, {
+        unresolved: true,
+        stdoutUnresolved: true,
+        stderrUnresolved: false,
+        exitCodeUnresolved: false,
+      }),
+    ],
+  });
+
+  assert.equal(models.ast.nodes[0].state, "executed");
+  assert.equal(models.runtime.nodes[0].state, "executed");
 });
 
 test("risk detection marks the AST node and only the matching runtime occurrence", () => {
@@ -744,6 +819,37 @@ test("risk detection marks the AST node and only the matching runtime occurrence
   assert.deepEqual(models.ast.nodes[0].detections, [detection]);
   assert.deepEqual(models.runtime.nodes[0].detections, []);
   assert.deepEqual(models.runtime.nodes[1].detections, [detection]);
+});
+
+test("streamed risk detection is retained until its live runtime occurrence appears", () => {
+  const detection = {
+    sequence: 1,
+    nodeId: 1,
+    pathId: 1,
+    command: "rm",
+    type: "destructive_operation",
+    error: 'command risk detected: "rm": destructive_operation',
+  };
+  const definition = node(1, 0, "command", "rm -rf /");
+  const ast = createASTFlowModel([definition]);
+  const runtime = createRuntimeFlowModel([definition]);
+
+  ast.appendDetection(detection);
+  runtime.appendDetection(detection);
+
+  assert.deepEqual(ast.model.nodes[0].detections, [detection]);
+  assert.equal(runtime.model.nodes.length, 0);
+
+  runtime.append(commandStarted(1, 1, "rm", [
+    { kind: 0, value: "-rf" },
+    { kind: 0, value: "/" },
+  ]));
+  assert.deepEqual(runtime.model.nodes[0].detections, [detection]);
+
+  ast.finish({ detections: [detection] });
+  runtime.finish({ detections: [detection] });
+  assert.equal(ast.model.nodes[0].detections.length, 1);
+  assert.equal(runtime.model.nodes[0].detections.length, 1);
 });
 
 test("concreteDisplayValue renders an empty value as empty", () => {

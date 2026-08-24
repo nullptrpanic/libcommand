@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"sort"
 
 	"github.com/nullptrpanic/libcommand/internal/materialize"
@@ -26,6 +27,7 @@ type ExecutionContext struct {
 	variableRollbackBytes int
 	nestedShellBytes      int
 	backgroundStepLimit   int
+	nextPathID            uint64
 	trace                 *executionTrace
 	redirects             []*Redirect
 }
@@ -55,6 +57,82 @@ type pathResult struct {
 	status Status
 }
 
+func (e *ExecutionContext) ensurePathID(state *State) uint64 {
+	if state.pathID != 0 {
+		return state.pathID
+	}
+	e.nextPathID++
+	state.pathID = e.nextPathID
+	return state.pathID
+}
+
+func (e *ExecutionContext) freezeParentState(state *State) *State {
+	if state.frozen {
+		return state
+	}
+	snapshot := state.clone()
+	snapshot.frozen = true
+	snapshot.frozenBytes = 0
+	bytes, ok := stateMaterialization(snapshot)
+	if ok {
+		bytes, ok = materialize.Add(bytes, materialize.EntryBytes, math.MaxInt)
+	}
+	if !ok {
+		bytes = math.MaxInt
+	}
+	snapshot.frozenBytes = bytes
+	return snapshot
+}
+
+func (e *ExecutionContext) assignSuccessorPaths(parent *State, nodeID uint64, successors []*pathResult) {
+	if len(successors) == 0 {
+		return
+	}
+	if parent == nil {
+		parent = successors[0].state
+	}
+	parentID := e.ensurePathID(parent)
+	if len(successors) == 1 {
+		if successors[0].state.pathID == 0 {
+			successors[0].state.pathID = parentID
+			successors[0].state.parent = parent.parent
+			successors[0].state.retainedParentBytes = parent.retainedParentBytes
+		}
+		return
+	}
+
+	seen := make(map[uint64]struct{}, len(successors))
+	requiresFork := false
+	for _, successor := range successors {
+		pathID := successor.state.pathID
+		if pathID == 0 || pathID == parentID {
+			requiresFork = true
+			break
+		}
+		if _, duplicate := seen[pathID]; duplicate {
+			requiresFork = true
+			break
+		}
+		seen[pathID] = struct{}{}
+	}
+	if !requiresFork {
+		return
+	}
+
+	parent = e.freezeParentState(parent)
+	children := make([]*State, len(successors))
+	for index, successor := range successors {
+		e.nextPathID++
+		successor.state.pathID = e.nextPathID
+		successor.state.parent = parent
+		successor.state.retainedParentBytes = parent.frozenBytes
+		successor.state.frozen = false
+		successor.state.frozenBytes = 0
+		children[index] = successor.state
+	}
+	e.trace.pathForked(parent, nodeID, children)
+}
+
 func (e *ExecutionContext) resolveExitStatus(path *pathResult, source *location) ([]*pathResult, error) {
 	_, unresolved := path.state.exitStatus.Data()
 	if !unresolved {
@@ -75,8 +153,8 @@ func (e *ExecutionContext) resolveExitStatus(path *pathResult, source *location)
 	failure := failureState.clone()
 	failure.setExitCode(1)
 	paths = append(paths, &pathResult{state: failure, status: path.status})
-	pathID := e.trace.ensurePath(path.state)
-	e.trace.assignSuccessorPaths(pathID, e.trace.currentNodeID(path.state), paths)
+	e.ensurePathID(path.state)
+	e.assignSuccessorPaths(path.state, e.trace.currentNodeID(path.state), paths)
 	if err := e.checkPathsMaterialization(paths, 0, source); err != nil {
 		return paths, err
 	}
@@ -184,6 +262,9 @@ func (e *ExecutionContext) evaluateStatements(paths []*pathResult, statements []
 		}
 	}()
 	current := paths
+	for _, path := range current {
+		e.ensurePathID(path.state)
+	}
 	budget, budgetErr := e.newRetainedPathBudget(current)
 	if budgetErr != nil {
 		return current, e.failPaths(current, budgetErr, unknownLocation)
@@ -212,7 +293,8 @@ func (e *ExecutionContext) evaluateStatements(paths []*pathResult, statements []
 			if !ok {
 				return next, e.failMaterializationGroups([][]*pathResult{next, current[index:]}, sourceLocation(statement))
 			}
-			pathID := e.trace.statementStarted(e, currentPath.state, statement, budget)
+			parentState := currentPath.state
+			e.trace.statementStarted(e, currentPath.state, statement, budget)
 			successors, err := e.evaluateStatement(currentPath.state, statement)
 			if err != nil {
 				next = append(next, successors...)
@@ -245,7 +327,7 @@ func (e *ExecutionContext) evaluateStatements(paths []*pathResult, statements []
 			if err != nil {
 				return next, err
 			}
-			e.trace.assignSuccessorPaths(pathID, e.trace.nodeID(statement), successors)
+			e.assignSuccessorPaths(parentState, e.trace.nodeID(statement), successors)
 			if !budget.replace(previousBytes, previousRetained, successors) {
 				e.rollbackVariables(rollbackCheckpoint)
 				groups := [][]*pathResult{next, current[index+1:]}
@@ -405,7 +487,6 @@ func (e *ExecutionContext) evaluateStatementInFrameFully(s *State, statement *sy
 			results = append(results, paths...)
 			continue
 		}
-
 		for index := len(paths) - 1; index >= 0; index-- {
 			path := paths[index]
 			if path.status == StatusCompleted {
@@ -587,6 +668,7 @@ func (e *ExecutionContext) evaluatePipeline(s *State, pipeline *syntax.BinaryCmd
 	for _, leftPath := range leftPaths {
 		if leftPath.status != StatusCompleted || e.stop {
 			parent := s.clone()
+			inheritPathIdentity(parent, leftPath.state)
 			mergeIssue(parent, leftPath.state)
 			mergeChildInput(parent, leftPath.state)
 			status := leftPath.status
@@ -618,6 +700,7 @@ func (e *ExecutionContext) evaluatePipeline(s *State, pipeline *syntax.BinaryCmd
 			leftStderrUnresolved = false
 		}
 		right := s.clone()
+		inheritPathIdentity(right, leftPath.state)
 		mergeIssue(right, leftPath.state)
 		right.fs = leftPath.state.fs.clone()
 		if pipeInputUnresolved {
@@ -636,6 +719,7 @@ func (e *ExecutionContext) evaluatePipeline(s *State, pipeline *syntax.BinaryCmd
 		}
 		for _, rightPath := range rightPaths {
 			parent := s.clone()
+			inheritPathIdentity(parent, rightPath.state)
 			mergeIssue(parent, rightPath.state)
 			mergeChildInput(parent, leftPath.state)
 			parent.fs = rightPath.state.fs.clone()
@@ -696,6 +780,7 @@ func (e *ExecutionContext) evaluateProcessSubstitutionPaths(s *State, substituti
 	results := make([]*pathResult, 0, len(childPaths))
 	for _, childPath := range childPaths {
 		parent := s.clone()
+		inheritPathIdentity(parent, childPath.state)
 		mergeIssue(parent, childPath.state)
 		mergeChildInput(parent, childPath.state)
 		parent.fs = childPath.state.fs.clone()
@@ -745,6 +830,7 @@ func (e *ExecutionContext) evaluateProcessOutputs(paths []*pathResult) ([]*pathR
 					clearInheritedExitTrap(child)
 					if status := e.checkContext(child, sourceLocation(outputs[name])); status != StatusCompleted {
 						parent := currentPath.state.clone()
+						inheritPathIdentity(parent, child)
 						mergeIssue(parent, child)
 						consumed = append(consumed, &pathResult{state: parent, status: status})
 						continue
@@ -763,6 +849,7 @@ func (e *ExecutionContext) evaluateProcessOutputs(paths []*pathResult) ([]*pathR
 					}
 					for _, childPath := range childPaths {
 						parent := currentPath.state.clone()
+						inheritPathIdentity(parent, childPath.state)
 						mergeIssue(parent, childPath.state)
 						parent.fs = childPath.state.fs.clone()
 						status := currentPath.status

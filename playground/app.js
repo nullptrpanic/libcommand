@@ -1,6 +1,8 @@
 import {
+  argumentPresentation,
   buildFlowModel,
   buildFlowModels,
+  commandResultUnresolved,
   concreteDisplayValue,
   createASTFlowModel,
   createRuntimeFlowModel,
@@ -17,6 +19,7 @@ import {
   parseEnvironment,
   startupMode,
   tokenizeBash,
+  visibleResultFields,
 } from "./model.js";
 
 const maximumRenderedNodes = 500;
@@ -385,6 +388,13 @@ function handleWorkerMessage({ data }) {
   if (!pendingRequest || data?.id !== pendingRequest.id) return;
   if (data?.type === "trace") {
     appendLiveTrace(data.event);
+    return;
+  }
+  if (data?.type === "detection") {
+    const astChanged = liveAST?.appendDetection(data.detection) || false;
+    const runtimeChanged = liveRuntime?.appendDetection(data.detection) || false;
+    const currentChanged = currentFlowPerspective === "ast" ? astChanged : runtimeChanged;
+    if (currentChanged) renderGraph(currentModel, true);
     return;
   }
   clearTimeout(pendingRequest.timeoutID);
@@ -808,7 +818,7 @@ function renderGraph(model, preserveSelection = false) {
       riskType.title = riskTypes.join(", ");
       head.append(riskType);
     }
-    head.append(createElement("span", "flow-node-path", node.pathID ? `P${node.pathID}` : "STATIC"));
+    if (nodeState(node) === "unresolved") head.append(createElement("span", "flow-node-unresolved", "unresolved"));
     const body = createElement("div", "flow-node-body");
     body.append(
       createElement("div", "flow-node-title", node.definition.snippet || node.definition.kind),
@@ -931,7 +941,7 @@ function renderInputSnapshot(snapshot, truncated, executed, invocation) {
     argumentsList.append(createElement("span", "empty-value", "no positional arguments"));
   } else {
     for (const argument of snapshot.args) {
-      argumentsList.append(createElement("span", `argument-chip ${snapshot.argsUnresolved ? "unresolved" : ""}`, snapshot.argsUnresolved ? `<unresolved: ${quote(argument)}>` : quote(argument)));
+      argumentsList.append(markedArgumentChip(quote(argument), snapshot.argsUnresolved));
     }
   }
   process.append(argumentsList);
@@ -950,7 +960,7 @@ function renderInputSnapshot(snapshot, truncated, executed, invocation) {
     if (variable.kind && variable.kind !== "string") badges.append(createElement("i", "", variable.kind));
     if (variable.unresolved) badges.append(createElement("i", "unresolved", "unresolved"));
     head.append(badges);
-    item.append(head, createElement("pre", "variable-value", variable.unresolved ? unresolvedText(variable.value) : variable.value));
+    item.append(head, createElement("pre", "variable-value", variable.value));
     list.append(item);
   }
   if (!list.childElementCount) list.append(createElement("div", "inspector-empty", "No variables are set."));
@@ -988,7 +998,7 @@ function renderCommandInput(invocation) {
       badges.append(createElement("i", "unresolved", "unresolved"));
       head.append(badges);
     }
-    item.append(head, createElement("pre", "variable-value", unknown ? unresolvedText(invocation.env[name]) : invocation.env[name]));
+    item.append(head, createElement("pre", "variable-value", invocation.env[name]));
     list.append(item);
   }
   if (!list.childElementCount) list.append(createElement("div", "inspector-empty", "No exported environment variables."));
@@ -1014,17 +1024,21 @@ function renderOutputSnapshot(node) {
     fragment.append(snapshotUnavailable(node.outputSnapshotTruncated, node.executed, "output"));
     return fragment;
   }
+  const fields = visibleResultFields(output);
   const status = inspectorSection("Node result");
   const table = createElement("div", "memory-table");
-  table.append(contextRow("Exit code", String(output.exitCode ?? 0), output.exitCodeUnresolved));
-  table.append(contextRow("Error", output.error || "", false));
+  for (const field of fields.filter((item) => !item.wide)) {
+    table.append(contextRow(field.label, field.value, field.unresolved));
+  }
   status.append(table);
   fragment.append(status);
 
-  const streams = inspectorSection("Node streams");
-  streams.append(snapshotField("Stdout", output.stdout, output.stdoutUnresolved));
-  streams.append(snapshotField("Stderr", output.stderr, output.stderrUnresolved));
-  fragment.append(streams);
+  const streamFields = fields.filter((item) => item.wide);
+  if (streamFields.length > 0) {
+    const streams = inspectorSection("Node streams");
+    for (const field of streamFields) streams.append(snapshotField(field.label, field.value, field.unresolved, true));
+    fragment.append(streams);
+  }
   if (output.truncated) fragment.append(createElement("div", "inspector-note", "This node's output was omitted after the trace display budget was reached."));
   return fragment;
 }
@@ -1036,18 +1050,29 @@ function snapshotUnavailable(truncated, executed, kind) {
 }
 
 function contextRow(label, value, unresolved) {
-  return memoryRow(label, unresolved ? unresolvedText(value) : concreteDisplayValue(value), unresolved ? "unresolved" : "");
+  const row = createElement("div", `memory-row ${unresolved ? "unresolved" : ""}`);
+  const name = createElement("span", "", label);
+  row.append(name, unresolved ? unresolvedBadge() : createElement("b", "", concreteDisplayValue(value)));
+  return row;
 }
 
-function snapshotField(label, value, unresolved) {
-  const field = createElement("div", "snapshot-field");
-  field.append(createElement("label", "", label));
-  field.append(createElement("pre", unresolved ? "unresolved-value" : "", unresolved ? unresolvedText(value) : concreteDisplayValue(value)));
+function snapshotField(label, value, unresolved, compactEmpty = false) {
+  const concrete = concreteDisplayValue(value);
+  const field = createElement("div", `snapshot-field ${compactEmpty && concrete === "" ? "status-only" : ""}`);
+  field.append(fieldLabel(label, unresolved));
+  if (!compactEmpty || concrete !== "") field.append(createElement("pre", "", concrete));
   return field;
 }
 
-function unresolvedText(representative) {
-  return representative ? `<unresolved>\nrepresentative: ${representative}` : "<unresolved>";
+function fieldLabel(label, unresolved) {
+  const element = createElement("label");
+  element.append(createElement("span", "", label));
+  if (unresolved) element.append(unresolvedBadge());
+  return element;
+}
+
+function unresolvedBadge() {
+  return createElement("i", "unresolved-badge", "unresolved");
 }
 
 function renderMemory(memory) {
@@ -1064,9 +1089,6 @@ function renderMemory(memory) {
   ];
   for (const [label, value] of entries) table.append(memoryRow(label, formatBytes(value)));
   section.append(table);
-  const note = createElement("div", "inspector-note", "Retained budget is the shared limit charge after the initial-state baseline. Path snapshot total includes that baseline. Neither value measures the browser or Go heap.");
-  note.style.marginTop = "8px";
-  section.append(note);
   return section;
 }
 
@@ -1099,12 +1121,9 @@ function renderOutputs(outputs, simulationError) {
       createElement("span", "", `${statusLabel(output.status)}${output.truncated ? " · truncated" : ""}`),
     );
     const grid = createElement("div", "output-grid");
-    grid.append(
-      outputField("Exit code", result.exitCodeUnresolved ? unresolvedText(String(result.exitCode ?? 0)) : String(result.exitCode ?? 0), result.exitCodeUnresolved),
-      outputField("Error", result.error || "", false),
-      outputField("Stdout", result.stdoutUnresolved ? unresolvedText(result.stdout || "") : concreteDisplayValue(result.stdout), result.stdoutUnresolved, true),
-      outputField("Stderr", result.stderrUnresolved ? unresolvedText(result.stderr || "") : concreteDisplayValue(result.stderr), result.stderrUnresolved, true),
-    );
+    for (const field of visibleResultFields(result)) {
+      grid.append(outputField(field.label, field.value, field.wide, field.unresolved));
+    }
     card.append(head, grid);
     fragment.append(card);
   }
@@ -1112,9 +1131,10 @@ function renderOutputs(outputs, simulationError) {
   elements.output_count.textContent = String(outputs.length);
 }
 
-function outputField(label, value, unresolved, wide = false) {
-  const field = createElement("div", `output-field ${wide ? "wide" : ""}`);
-  field.append(createElement("label", "", label), createElement("pre", unresolved ? "unresolved-value" : "", value));
+function outputField(label, value, wide = false, unresolved = false) {
+  const field = createElement("div", `output-field ${wide ? "wide" : ""} ${value === "" ? "status-only" : ""}`);
+  field.append(fieldLabel(label, unresolved));
+  if (value !== "") field.append(createElement("pre", "", value));
   return field;
 }
 
@@ -1130,7 +1150,7 @@ function renderInvocations(invocations) {
     const argumentsList = createElement("div", "argument-list");
     for (const argument of item.invocation?.args || []) argumentsList.append(argumentChip(argument));
     card.append(top, argumentsList);
-    if (item.result) card.append(createElement("div", "inspector-source", `exit ${item.result.exitCode}${item.result.unresolved ? " · unresolved" : ""}`));
+    if (item.result) card.append(createElement("div", "inspector-source", `exit ${item.result.exitCode}`));
     fragment.append(card);
   }
   elements.invocations_view.replaceChildren(fragment);
@@ -1154,7 +1174,12 @@ function renderDiagnostics(model) {
 
 function argumentChip(argument) {
   const unresolved = argument?.kind !== 0;
-  return createElement("span", `argument-chip ${unresolved ? "unresolved" : ""}`, unresolved ? "<unresolved>" : quote(argument?.value || ""));
+  return markedArgumentChip(unresolved ? "" : quote(argument?.value || ""), unresolved);
+}
+
+function markedArgumentChip(value, unresolved) {
+  const presentation = argumentPresentation({ kind: unresolved ? 1 : 0, value });
+  return createElement("span", `argument-chip ${presentation.unresolved ? "unresolved" : ""}`, presentation.value);
 }
 
 function visualStepInterval() {
@@ -1335,7 +1360,7 @@ function createElement(tag, className = "", text = "") {
 function nodeState(node) {
   if (node.detections?.length) return "risk-detected";
   if (!node.executed) return "not-executed";
-  if (node.forked || node.commandResult?.unresolved || node.status === 3 || node.pathStatus === 3) return "unresolved";
+  if (node.forked || commandResultUnresolved(node.commandResult) || node.status === 3 || node.pathStatus === 3) return "unresolved";
   return "executed";
 }
 

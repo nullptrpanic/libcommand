@@ -75,13 +75,14 @@ const (
 	CommandStop = shellruntime.CommandStop
 )
 
-// CommandResult is the simulated process result returned by a command. Set
-// Unresolved when the command cannot determine its output or exit status. The
-// runtime trusts commands to satisfy the result contract.
+// CommandResult is the simulated process result returned by a command. Use
+// CommandContext.UnresolvedResult when none of its output or exit status can
+// be determined, or CommandContext.ResultUnknown for partial uncertainty.
 type CommandResult = shellruntime.CommandResult
 
 // State is the current simulated shell state. Commands may inspect and mutate
-// it through its methods. The pointer is valid only for the active call.
+// the active state through its methods. Parent returns an immutable fork
+// snapshot. State pointers are valid only for the active call.
 type State = shellruntime.State
 
 // CommandContext provides Shell execution capabilities for one command call.

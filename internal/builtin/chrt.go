@@ -15,11 +15,10 @@ func executeChrt(_ context.Context, shell *runtime.CommandContext, invocation *r
 	index := 0
 	pidMode := false
 	for index < len(invocation.Args) {
-		argument := invocation.Args[index]
-		if argument.Kind != runtime.ArgumentString {
-			return unresolvedWrapperArgument(shell, invocation.Name)
+		value, ok := wrapperArgument(invocation, index)
+		if !ok {
+			return unresolvedWrapper()
 		}
-		value := argument.Value
 		if value == "--" {
 			index++
 			break
@@ -33,8 +32,8 @@ func executeChrt(_ context.Context, shell *runtime.CommandContext, invocation *r
 			continue
 		}
 		if value == "-T" || value == "--sched-runtime" || value == "-P" || value == "--sched-period" || value == "-D" || value == "--sched-deadline" {
-			if index+1 >= len(invocation.Args) || invocation.Args[index+1].Kind != runtime.ArgumentString {
-				return unresolvedWrapperArgument(shell, invocation.Name)
+			if _, ok := wrapperArgument(invocation, index+1); !ok {
+				return unresolvedWrapper()
 			}
 			index += 2
 			continue
@@ -43,13 +42,13 @@ func executeChrt(_ context.Context, shell *runtime.CommandContext, invocation *r
 			index++
 			continue
 		}
-		return unsupportedWrapperOption(shell, invocation.Name, value)
+		return unresolvedWrapper()
 	}
 	if pidMode {
 		return shell.StopUnresolved("chrt PID mode does not execute a nested command"), nil
 	}
-	if index >= len(invocation.Args) || invocation.Args[index].Kind != runtime.ArgumentString {
-		return unresolvedWrapperArgument(shell, invocation.Name)
+	if _, ok := wrapperArgument(invocation, index); !ok {
+		return unresolvedWrapper()
 	}
 	return invokeExternalWrapper(shell, invocation, index+1, nil)
 }

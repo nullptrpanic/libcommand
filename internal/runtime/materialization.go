@@ -321,6 +321,9 @@ func stateMaterialization(s *State) (int, bool) {
 	if s.fs != nil && !add(s.fs.materializedBytes) {
 		return 0, false
 	}
+	if !add(s.retainedParentBytes) {
+		return 0, false
+	}
 	if !add(len(s.user)) {
 		return 0, false
 	}
