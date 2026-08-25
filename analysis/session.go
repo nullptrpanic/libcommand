@@ -98,9 +98,7 @@ func (s *Session) facts(state *libcommand.State) *pathFacts {
 	}
 	facts := &pathFacts{}
 	if parent := state.Parent(); parent != nil {
-		if inherited := s.paths[parent.PathID()]; inherited != nil {
-			facts = clonePathFacts(inherited)
-		}
+		facts = clonePathFacts(s.facts(parent))
 	}
 	s.paths[pathID] = facts
 	return facts
