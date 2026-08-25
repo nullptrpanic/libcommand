@@ -14,7 +14,7 @@ func TestRevReversesEachInputLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExitCode != 0 || string(result.Stdout) != "cba\n界世\ntsal" || len(result.Stderr) != 0 {
+	if result.ExitCode.Value != 0 || string(result.Stdout.Value) != "cba\n界世\ntsal" || len(result.Stderr.Value) != 0 {
 		t.Fatalf("result = %#v", result)
 	}
 }
@@ -24,7 +24,7 @@ func TestRevRejectsFileOperands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if result.ExitCode != 1 || len(result.Stdout) != 0 || string(result.Stderr) != "rev: file operands are not supported\n" {
+	if result.ExitCode.Value != 1 || len(result.Stdout.Value) != 0 || string(result.Stderr.Value) != "rev: file operands are not supported\n" {
 		t.Fatalf("result = %#v", result)
 	}
 }
@@ -34,7 +34,7 @@ func TestRevDeclinesUnresolvedStdin(t *testing.T) {
 		Name:       "rev",
 		Unresolved: &runtime.InvocationUnresolved{Stdin: true},
 	}, 2<<20)
-	if err != nil || !result.AllUnresolved() {
+	if err != nil || !(result.Stdout.Unresolved && result.Stderr.Unresolved && result.ExitCode.Unresolved) {
 		t.Fatalf("result = %#v, error = %v", result, err)
 	}
 }
@@ -42,7 +42,7 @@ func TestRevDeclinesUnresolvedStdin(t *testing.T) {
 func TestRevHonorsMaterializationLimit(t *testing.T) {
 	invocation := &runtime.Invocation{Name: "rev", Stdin: []byte("abc\n")}
 	result, err := executeRev(context.Background(), invocation, 4)
-	if err != nil || string(result.Stdout) != "cba\n" {
+	if err != nil || string(result.Stdout.Value) != "cba\n" {
 		t.Fatalf("exact limit result = %#v, error = %v", result, err)
 	}
 	result, err = executeRev(context.Background(), invocation, 3)
@@ -98,7 +98,7 @@ func (*cancelAfterFirstCheckContext) Value(any) any {
 	return nil
 }
 
-func runRev(ctx context.Context, stdin []byte, args []string) (*runtime.CommandResult, error) {
+func runRev(ctx context.Context, stdin []byte, args []string) (*runtime.CommandOutput, error) {
 	arguments := make([]*runtime.Argument, len(args))
 	for index, argument := range args {
 		arguments[index] = &runtime.Argument{Kind: runtime.ArgumentString, Value: argument}

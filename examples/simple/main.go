@@ -6,7 +6,6 @@ import (
 	"fmt"
 
 	"github.com/nullptrpanic/libcommand"
-	"github.com/nullptrpanic/libcommand/internal/runtime"
 )
 
 //go:embed script.sh
@@ -14,13 +13,13 @@ var script string
 
 func main() {
 	simulator := libcommand.NewBuilder().
-		Command("lark-cli", func(ctx context.Context, commandContext *libcommand.CommandContext, invocation *libcommand.Invocation) (*runtime.CommandResult, error) {
+		Command("lark-cli", func(_ context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
 			fmt.Print(invocation.Name)
 			for _, argument := range invocation.Args {
 				fmt.Printf(" %q", argument.Value)
 			}
 			fmt.Print("\n")
-			return &libcommand.CommandResult{}, nil
+			return command.Result(command.Output().Build()), nil
 		}).
 		Build()
 

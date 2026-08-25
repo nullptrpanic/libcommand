@@ -23,12 +23,12 @@ func (c *CommandContext) executeInvoke(name string, arguments []*Argument, built
 	definition := c.execution.lookupCommandDefinition(name)
 	if !commandDefinitionExecutable(definition) || definition.Fallback && builtinOnly || builtinOnly && !definition.Builtin {
 		if builtinOnly {
-			return c.applyOrdinaryResult(&CommandResult{
-				Stderr:   []byte(fmt.Sprintf("builtin: %s: not a shell builtin\n", name)),
-				ExitCode: 1,
-			})
+			return c.applyResult(c.Result(c.Output().
+				Stderr(Resolved([]byte(fmt.Sprintf("builtin: %s: not a shell builtin\n", name)))).
+				ExitCode(Resolved(1)).
+				Build()))
 		}
-		return c.applyOrdinaryResult(nil)
+		return c.applyResult(nil)
 	}
 	input, _ := c.state.stdin.Data()
 	invocation, status, err := c.execution.commandInvocation(
@@ -49,7 +49,7 @@ func (c *CommandContext) executeInvoke(name string, arguments []*Argument, built
 func (c *CommandContext) executeInvokeExternal(name string, arguments []*Argument) ([]*pathResult, error) {
 	definition := c.execution.lookupCommandDefinition(name)
 	if !commandDefinitionExecutable(definition) || definition.Builtin && !definition.UserOverride {
-		return c.applyOrdinaryResult(nil)
+		return c.applyResult(nil)
 	}
 	return c.executeInvoke(name, arguments, false)
 }
@@ -98,7 +98,7 @@ func saveEnvironmentVariable(state *State, saved map[string]*savedVariable, name
 // Replace invokes a command and terminates each successful path as exec does.
 func (c *CommandContext) executeReplace(name string, arguments []*Argument, clearEnvironment bool) ([]*pathResult, error) {
 	state := c.state
-	failure := state.snapshotForUnknownFailure()
+	failure := state.clone()
 	if clearEnvironment {
 		state.vars.clearExported()
 	}
@@ -108,17 +108,26 @@ func (c *CommandContext) executeReplace(name string, arguments []*Argument, clea
 	if err != nil {
 		return paths, err
 	}
+	results := make([]*pathResult, 0, len(paths)+1)
 	for _, path := range paths {
 		if path.status != StatusCompleted {
+			results = append(results, path)
 			continue
 		}
 		_, exitUnresolved := path.state.exitStatus.Data()
 		if unknownExternal && exitUnresolved {
-			path.state.exitFailure = failure
+			path.state.setExitCode(0)
+			path.state.signal = signalExit
+			results = append(results, path)
+			failureState := failure.clone()
+			failureState.setExitCode(1)
+			results = append(results, &pathResult{state: failureState, status: StatusCompleted})
+			continue
 		}
 		path.state.signal = signalExit
+		results = append(results, path)
 	}
-	return paths, nil
+	return results, nil
 }
 
 // Evaluate parses and executes source in the current shell state.

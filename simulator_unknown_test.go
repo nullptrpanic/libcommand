@@ -25,9 +25,9 @@ func TestSimulatorDiscoversHandlerInUnknownWordLoop(t *testing.T) {
 	source := repositoryScriptSource(t, "08-send-30-chat-messages.sh")
 
 	var calls [][]*Argument
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		calls = append(calls, append([]*Argument(nil), invocation.Args...))
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {
 		t.Fatal(err)
@@ -141,12 +141,12 @@ func TestSimulatorUserSeqOverridesBuiltin(t *testing.T) {
 	seqCalls := 0
 	var values []string
 	simulator := NewBuilder().
-		Command("seq", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("seq", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			seqCalls++
 			if got := argumentStrings(t, invocation); !slices.Equal(got, []string{"1", "10"}) {
 				t.Fatalf("seq arguments = %#v", got)
 			}
-			return &CommandResult{Stdout: []byte("override\n")}, nil
+			return commandResultForTest(command, []byte("override\n"), nil, 0), nil
 		}).
 		Command("lark-cli", recordFirstArgument(t, &values)).
 		Build()
@@ -172,9 +172,9 @@ func TestSimulatorKeepsUnresolvedDefaultSeqOpen(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var calls [][]*Argument
-			simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+			simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 				calls = append(calls, append([]*Argument(nil), invocation.Args...))
-				return &CommandResult{}, nil
+				return commandResultForTest(command, nil, nil, 0), nil
 			})
 			if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: test.source}); err != nil {
 				t.Fatal(err)
@@ -188,12 +188,12 @@ func TestSimulatorKeepsUnresolvedDefaultSeqOpen(t *testing.T) {
 
 func TestSimulatorDiscoversBuiltinSeqThroughCommandAndEnv(t *testing.T) {
 	var calls []*Argument
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		if len(invocation.Args) != 1 {
 			t.Fatalf("arguments = %#v", invocation.Args)
 		}
 		calls = append(calls, invocation.Args[0])
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	source := `command -v seq >/dev/null && lark-cli found
 for item in $(command seq 2); do lark-cli "command-$item"; done
@@ -215,9 +215,9 @@ for item in $(env seq 2); do lark-cli "env-$item"; done`
 
 func TestSimulatorMarksUnknownHandlerArgument(t *testing.T) {
 	var calls [][]*Argument
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		calls = append(calls, append([]*Argument(nil), invocation.Args...))
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{
 		Source: `for i in $(unknown); do lark-cli "$i"; done`,
@@ -231,9 +231,9 @@ func TestSimulatorMarksUnknownHandlerArgument(t *testing.T) {
 
 func TestSimulatorDiscoversDynamicHandlerInUnknownWordLoop(t *testing.T) {
 	var calls [][]*Argument
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		calls = append(calls, append([]*Argument(nil), invocation.Args...))
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{
 		Source: `command_name=lark-cli; for i in $(unknown); do "$command_name" "$i"; done`,
@@ -276,9 +276,9 @@ func TestSimulatorLazilyExploresUnregisteredCommandStatus(t *testing.T) {
 
 func TestSimulatorExploresUnknownBranches(t *testing.T) {
 	var args []string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		args = append(args, argumentStrings(t, invocation)...)
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	source := `if [[ $RANDOM -gt 10 ]]; then lark-cli yes; else lark-cli no; fi
 case "$RANDOM" in one) lark-cli one;; two) lark-cli two;; esac`
@@ -369,7 +369,7 @@ func TestSimulatorRejectsUnknownDataAtConcreteBoundaries(t *testing.T) {
 
 func TestSimulatorMarksUnknownInvocationFields(t *testing.T) {
 	var got *Invocation
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		got = &Invocation{
 			Name:       invocation.Name,
 			Args:       append([]*Argument(nil), invocation.Args...),
@@ -378,7 +378,7 @@ func TestSimulatorMarksUnknownInvocationFields(t *testing.T) {
 			Stdin:      append([]byte(nil), invocation.Stdin...),
 			Unresolved: invocation.Unresolved,
 		}
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{
 		Source: `value=$(unknown-command); export value; unknown-command | lark-cli "$value"`,
@@ -398,9 +398,9 @@ func TestSimulatorMarksUnknownInvocationFields(t *testing.T) {
 
 func TestSimulatorMarksUnknownDirectory(t *testing.T) {
 	var got *Invocation
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		got = invocation
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{
 		Source: `cd /unspecified && lark-cli run`,
@@ -428,9 +428,9 @@ func TestSimulatorPropagatesUnknownBuiltinOutput(t *testing.T) {
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var got *Invocation
-			simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+			simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 				got = invocation
-				return &CommandResult{}, nil
+				return commandResultForTest(command, nil, nil, 0), nil
 			})
 			source := `value=$(unknown-command); ` + test.command + ` | lark-cli consume`
 			if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {
@@ -445,9 +445,9 @@ func TestSimulatorPropagatesUnknownBuiltinOutput(t *testing.T) {
 
 func TestSimulatorCommandBuiltinForwardsUnknownArguments(t *testing.T) {
 	var got *Invocation
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		got = invocation
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{
 		Source: `value=$(unknown-command); command lark-cli "$value"`,
@@ -461,9 +461,9 @@ func TestSimulatorCommandBuiltinForwardsUnknownArguments(t *testing.T) {
 
 func TestSimulatorEnvForwardsUnknownArguments(t *testing.T) {
 	var got *Invocation
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		got = invocation
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{
 		Source: `value=$(unknown-command); env -u DROP TOKEN=known lark-cli "$value"`,
@@ -484,9 +484,9 @@ func TestSimulatorEnvForwardsUnknownArguments(t *testing.T) {
 
 func TestSimulatorExecForwardsUnknownArgumentsAndTerminates(t *testing.T) {
 	var calls [][]*Argument
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		calls = append(calls, append([]*Argument(nil), invocation.Args...))
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{
 		Source: `value=$(unknown-command); exec lark-cli "$value"; lark-cli after`,
@@ -551,8 +551,8 @@ func TestSimulatorDoesNotRejectUnknownBuiltinArguments(t *testing.T) {
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
-			simulator := mustBuildSimulator(t, "lark-cli", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
-				return &CommandResult{}, nil
+			simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+				return commandResultForTest(command, nil, nil, 0), nil
 			})
 			source := `value=$(unknown-command); ` + test.command + `; lark-cli after`
 			if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {

@@ -75,10 +75,33 @@ const (
 	CommandStop = shellruntime.CommandStop
 )
 
-// CommandResult is the simulated process result returned by a command. Use
-// CommandContext.UnresolvedResult when none of its output or exit status can
-// be determined, or CommandContext.ResultUnknown for partial uncertainty.
+// CommandResult is the simulated process result returned by a command. Build a
+// normal result with CommandContext.Result. For multiple possible outcomes,
+// use CommandContext.NewResult, ForkState, and CommandResult.AddOutput.
 type CommandResult = shellruntime.CommandResult
+
+// Uncertain carries one representative value and reports whether the complete
+// value could be resolved by the simulator.
+type Uncertain[T any] = shellruntime.Uncertain[T]
+
+// Resolved returns a value whose complete contents are known.
+func Resolved[T any](value T) *Uncertain[T] {
+	return shellruntime.Resolved(value)
+}
+
+// Unresolved returns a representative value whose complete contents are not
+// known.
+func Unresolved[T any](value T) *Uncertain[T] {
+	return shellruntime.Unresolved(value)
+}
+
+// CommandOutput is one possible stdout, stderr, exit-code, and state outcome of
+// a registered command.
+type CommandOutput = shellruntime.CommandOutput
+
+// CommandOutputBuilder constructs one CommandOutput. CommandContext.Output
+// initializes resolved empty streams and resolved exit code zero.
+type CommandOutputBuilder = shellruntime.CommandOutputBuilder
 
 // State is the current simulated shell state. Commands may inspect and mutate
 // the active state through its methods. Parent returns an immutable fork
@@ -90,9 +113,9 @@ type State = shellruntime.State
 type CommandContext = shellruntime.CommandContext
 
 // Command handles one expanded invocation. Commands can be called concurrently
-// by separate Simulate calls and must be concurrency-safe. A nil result and nil
-// error use unresolved-command behavior. A non-nil error aborts simulation.
-// Panics are converted to simulation errors.
+// by separate Simulate calls and must be concurrency-safe. A nil or empty
+// result with a nil error uses unresolved-command behavior. A non-nil error
+// aborts simulation. Panics are converted to simulation errors.
 type Command = shellruntime.Command
 
 // CommandMiddleware decorates one command. Middleware registered first wraps

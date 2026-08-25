@@ -34,12 +34,12 @@ func executeDeclaration(_ context.Context, shell *runtime.CommandContext, invoca
 	if err != nil {
 		var usage *declarationError
 		if errors.As(err, &usage) {
-			return &runtime.CommandResult{Stderr: []byte(usage.message + "\n"), ExitCode: usage.exitCode}, nil
+			return commandResult(shell, nil, []byte(usage.message+"\n"), usage.exitCode), nil
 		}
 		return shell.ExpansionError(err, err.Error()), nil
 	}
 	if !resolved {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	return applyDeclaration(shell, spec)
 }
@@ -167,7 +167,7 @@ func parseDeclarationAssignment(argument string) (*syntax.Assign, error) {
 
 func applyDeclaration(shell *runtime.CommandContext, spec *declarationSpec) (*runtime.CommandResult, error) {
 	if spec.local && !shell.LocalScopeAvailable() {
-		return &runtime.CommandResult{Stderr: []byte("local: can only be used in a function\n"), ExitCode: 1}, nil
+		return commandResult(shell, nil, []byte("local: can only be used in a function\n"), 1), nil
 	}
 	for _, assignment := range spec.assignments {
 		if assignment.Name == nil || !shell.Variable(assignment.Name.Value).ReadOnly {
@@ -181,7 +181,7 @@ func applyDeclaration(shell *runtime.CommandContext, spec *declarationSpec) (*ru
 		if spec.local {
 			message = fmt.Sprintf("%s: %s: readonly variable\n", spec.name, name)
 		}
-		return &runtime.CommandResult{Stderr: []byte(message), ExitCode: 1}, nil
+		return commandResult(shell, nil, []byte(message), 1), nil
 	}
 	snapshot := shell.Snapshot()
 	restore := func() {
@@ -219,5 +219,5 @@ func applyDeclaration(shell *runtime.CommandContext, spec *declarationSpec) (*ru
 			return nil, err
 		}
 	}
-	return &runtime.CommandResult{}, nil
+	return commandResult(shell, nil, nil, 0), nil
 }

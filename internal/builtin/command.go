@@ -27,16 +27,16 @@ func executeCommand(_ context.Context, shell *runtime.CommandContext, invocation
 		args = args[1:]
 	}
 	if len(args) == 0 {
-		return &runtime.CommandResult{}, nil
+		return commandResult(shell, nil, nil, 0), nil
 	}
 	if args[0].Kind != runtime.ArgumentString {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	if !optionsTerminated && (args[0].Value == "-v" || args[0].Value == "-V") {
 		names := make([]string, 0, len(args)-1)
 		for _, argument := range args[1:] {
 			if argument.Kind != runtime.ArgumentString {
-				return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, true, false, false), nil
+				return uncertainCommandResult(shell, nil, nil, 1, true, false, false), nil
 			}
 			names = append(names, argument.Value)
 		}

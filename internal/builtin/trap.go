@@ -16,25 +16,25 @@ func init() {
 func executeTrap(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	if len(args) == 0 {
 		return queryTraps(shell, nil), nil
 	}
 	if args[0] == "-l" {
-		return &runtime.CommandResult{Stderr: []byte("trap: -l is not supported\n"), ExitCode: 2}, nil
+		return commandResult(shell, nil, []byte("trap: -l is not supported\n"), 2), nil
 	}
 	if args[0] == "-p" {
 		return queryTraps(shell, args[1:]), nil
 	}
 	if len(args) < 2 {
-		return &runtime.CommandResult{Stderr: []byte("trap: usage: trap [-lp] [[arg] signal ...]\n"), ExitCode: 2}, nil
+		return commandResult(shell, nil, []byte("trap: usage: trap [-lp] [[arg] signal ...]\n"), 2), nil
 	}
 	action := args[0]
 	for _, rawSignal := range args[1:] {
 		signal := canonicalSignal(rawSignal)
 		if signal == "" {
-			return &runtime.CommandResult{Stderr: []byte("trap: invalid signal specification\n"), ExitCode: 1}, nil
+			return commandResult(shell, nil, []byte("trap: invalid signal specification\n"), 1), nil
 		}
 		if action == "-" {
 			shell.DeleteTrap(signal)
@@ -42,7 +42,7 @@ func executeTrap(_ context.Context, shell *runtime.CommandContext, invocation *r
 		}
 		shell.SetTrap(signal, action)
 	}
-	return &runtime.CommandResult{}, nil
+	return commandResult(shell, nil, nil, 0), nil
 }
 
 func queryTraps(shell *runtime.CommandContext, signals []string) *runtime.CommandResult {
@@ -58,7 +58,7 @@ func queryTraps(shell *runtime.CommandContext, signals []string) *runtime.Comman
 	for _, rawSignal := range signals {
 		signal := canonicalSignal(rawSignal)
 		if signal == "" {
-			return &runtime.CommandResult{Stderr: []byte("trap: invalid signal specification\n"), ExitCode: 1}
+			return commandResult(shell, nil, []byte("trap: invalid signal specification\n"), 1)
 		}
 		command, exists := traps[signal]
 		if !exists {
@@ -66,7 +66,7 @@ func queryTraps(shell *runtime.CommandContext, signals []string) *runtime.Comman
 		}
 		fmt.Fprintf(&output, "trap -- %s %s\n", quoteShellWord(command), signal)
 	}
-	return &runtime.CommandResult{Stdout: []byte(output.String())}
+	return commandResult(shell, []byte(output.String()), nil, 0)
 }
 
 func canonicalSignal(signal string) string {

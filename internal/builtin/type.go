@@ -15,7 +15,7 @@ func init() {
 func executeType(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	mode := "verbose"
 	for len(args) > 0 && strings.HasPrefix(args[0], "-") {
@@ -25,7 +25,7 @@ func executeType(_ context.Context, shell *runtime.CommandContext, invocation *r
 		case "--":
 			return lookupCommands(shell, args[1:], mode), nil
 		default:
-			return &runtime.CommandResult{Stderr: []byte("type: unsupported option\n"), ExitCode: 2}, nil
+			return commandResult(shell, nil, []byte("type: unsupported option\n"), 2), nil
 		}
 		args = args[1:]
 	}
@@ -34,7 +34,7 @@ func executeType(_ context.Context, shell *runtime.CommandContext, invocation *r
 
 func lookupCommands(shell *runtime.CommandContext, names []string, mode string) *runtime.CommandResult {
 	if len(names) == 0 {
-		return &runtime.CommandResult{ExitCode: 1}
+		return commandResult(shell, nil, nil, 1)
 	}
 	var output strings.Builder
 	found := false
@@ -66,7 +66,7 @@ func lookupCommands(shell *runtime.CommandContext, names []string, mode string) 
 	if !found {
 		exitCode = 1
 	}
-	return &runtime.CommandResult{Stdout: []byte(output.String()), ExitCode: exitCode}
+	return commandResult(shell, []byte(output.String()), nil, exitCode)
 }
 
 func commandKindName(kind runtime.CommandKind) string {

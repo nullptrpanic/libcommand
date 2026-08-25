@@ -14,11 +14,11 @@ func TestSimulatorContinuesAfterUnresolvedCommandName(t *testing.T) {
 			if invocation.Unresolved != nil && invocation.Unresolved.Name {
 				unresolvedNames++
 			}
-			return command.UnresolvedResult(), nil
+			return unresolvedCommandResultForTest(command), nil
 		}).
-		Command("record", func(_ context.Context, _ *CommandContext, _ *Invocation) (*CommandResult, error) {
+		Command("record", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			afterCalls++
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -36,9 +36,9 @@ func TestSimulatorContinuesAfterUnresolvedCommandName(t *testing.T) {
 func TestSimulatorExploresUnknownWordLoopWithoutBodyCandidate(t *testing.T) {
 	var arguments []*Argument
 	simulator := NewBuilder().
-		Command("record", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			arguments = append(arguments, invocation.Args[0])
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -71,7 +71,7 @@ func TestSimulatorContinuesAfterUnresolvedAndAmbiguousRedirects(t *testing.T) {
 			} else {
 				afterCalls++
 			}
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -154,14 +154,14 @@ func TestMissingRedirectionsUseEmptyVirtualFiles(t *testing.T) {
 	var outputUnresolved bool
 	var outputExists bool
 	simulator := NewBuilder().
-		Command("capture-input", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("capture-input", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			input = append([]byte(nil), invocation.Stdin...)
 			inputUnresolved = invocation.Unresolved != nil && invocation.Unresolved.Stdin
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Command("inspect-output", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			output, outputUnresolved, outputExists = command.ReadFile("/missing/output")
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -186,7 +186,7 @@ func TestSimulatorModelsArbitraryDescriptorsAndExternalDevices(t *testing.T) {
 			copied := *invocation
 			calls = append(calls, &copied)
 			redirects = append(redirects, clonePublicRedirects(command.Redirects()))
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -212,13 +212,13 @@ probe after`
 func TestSimulatorSyntaxChecksShellWithoutExecutingBody(t *testing.T) {
 	var calls []string
 	simulator := NewBuilder().
-		Command("dangerous", func(_ context.Context, _ *CommandContext, _ *Invocation) (*CommandResult, error) {
+		Command("dangerous", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			calls = append(calls, "dangerous")
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
-		Command("record", func(_ context.Context, _ *CommandContext, _ *Invocation) (*CommandResult, error) {
+		Command("record", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			calls = append(calls, "record")
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -239,9 +239,9 @@ record after`
 func TestSimulatorAcceptsInteractiveShellOption(t *testing.T) {
 	var calls []string
 	simulator := NewBuilder().
-		Command("record", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			calls = append(calls, invocation.Args[0].Value)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -259,13 +259,13 @@ record after`
 func TestSimulatorAcceptsExecArgvZeroAndLoginOptions(t *testing.T) {
 	var calls []string
 	simulator := NewBuilder().
-		Command("target", func(_ context.Context, _ *CommandContext, _ *Invocation) (*CommandResult, error) {
+		Command("target", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			calls = append(calls, "target")
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
-		Command("record", func(_ context.Context, _ *CommandContext, _ *Invocation) (*CommandResult, error) {
+		Command("record", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			calls = append(calls, "record")
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -282,9 +282,9 @@ func TestSimulatorBoundsBackgroundInfiniteLoop(t *testing.T) {
 	calls := 0
 	simulator := NewBuilder().
 		Limits(&Limits{MaxExecutionSteps: 100}).
-		Command("record", func(_ context.Context, _ *CommandContext, _ *Invocation) (*CommandResult, error) {
+		Command("record", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			calls++
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -303,9 +303,9 @@ func TestSimulatorCompletesFiniteBackgroundLoop(t *testing.T) {
 	var calls []string
 	simulator := NewBuilder().
 		Limits(&Limits{MaxExecutionSteps: 100}).
-		Command("record", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			calls = append(calls, invocation.Args[0].Value)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 

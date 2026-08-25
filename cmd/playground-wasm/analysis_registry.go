@@ -17,6 +17,8 @@ var playgroundAnalysisCommands = map[string]libcommand.Command{
 	"init":      commandanalysis.Init,
 	"telinit":   commandanalysis.Telinit,
 	"systemctl": commandanalysis.Systemctl,
+	"mkfifo":    commandanalysis.Mkfifo,
+	"cat":       commandanalysis.Cat,
 	"nc":        commandanalysis.NC,
 	"ncat":      commandanalysis.Ncat,
 	"netcat":    commandanalysis.Netcat,

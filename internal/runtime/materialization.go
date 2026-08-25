@@ -376,12 +376,6 @@ func stateMaterialization(s *State) (int, bool) {
 	if s.issue != nil && !add(len(s.issue.Error())) {
 		return 0, false
 	}
-	if s.exitFailure != nil {
-		failureBytes, ok := stateMaterialization(s.exitFailure)
-		if !ok || !add(materialize.EntryBytes+failureBytes) {
-			return 0, false
-		}
-	}
 	return total, true
 }
 

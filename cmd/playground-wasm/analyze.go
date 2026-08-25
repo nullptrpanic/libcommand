@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/nullptrpanic/libcommand"
+	commandanalysis "github.com/nullptrpanic/libcommand/analysis"
 	shellruntime "github.com/nullptrpanic/libcommand/internal/runtime"
 )
 
@@ -157,23 +158,23 @@ func analyzeWithStream(request *playgroundRequest, maximumEvents int, stream fun
 	for _, command := range request.Commands {
 		current := command
 		wildcardConfigured = wildcardConfigured || current.Name == "*"
-		builder.Command(current.Name, func(_ context.Context, _ *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+		builder.Command(current.Name, func(_ context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
 			if current.JavaScript != nil {
-				return executeJavaScriptCommand(current.Name, invocation)
+				return executeJavaScriptCommand(command, current.Name, invocation)
 			}
 			if current.Error != "" {
 				return nil, errors.New(current.Error)
 			}
-			return &libcommand.CommandResult{
-				Stdout:   []byte(current.Stdout),
-				Stderr:   []byte(current.Stderr),
-				ExitCode: current.ExitCode,
-			}, nil
+			return fixedCommandResult(command, current.Stdout, current.Stderr, current.ExitCode), nil
 		})
 	}
 	if !wildcardConfigured {
 		builder.Command("*", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return command.UnresolvedResult(), nil
+			return command.Result(command.Output().
+				Stdout(libcommand.Unresolved[[]byte](nil)).
+				Stderr(libcommand.Unresolved[[]byte](nil)).
+				ExitCode(libcommand.Unresolved(0)).
+				Build()), nil
 		})
 	}
 
@@ -230,7 +231,8 @@ func analyzeWithStream(request *playgroundRequest, maximumEvents int, stream fun
 	}
 
 	simulator := builder.Build()
-	err := simulator.SimulateTraceWithOptions(context.Background(), &libcommand.SimulationRequest{
+	ctx := commandanalysis.WithSession(context.Background(), commandanalysis.NewSession())
+	err := simulator.SimulateTraceWithOptions(ctx, &libcommand.SimulationRequest{
 		Source: request.Source,
 		Env:    request.Env,
 		Args:   request.Args,
@@ -245,6 +247,14 @@ func analyzeWithStream(request *playgroundRequest, maximumEvents int, stream fun
 	}
 	response.Detections = analyzer.detections
 	return response
+}
+
+func fixedCommandResult(command *libcommand.CommandContext, stdout, stderr string, exitCode int) *libcommand.CommandResult {
+	return command.Result(command.Output().
+		Stdout(libcommand.Resolved([]byte(stdout))).
+		Stderr(libcommand.Resolved([]byte(stderr))).
+		ExitCode(libcommand.Resolved(exitCode)).
+		Build())
 }
 
 func recordPlaygroundOutput(response *playgroundResponse, event *libcommand.TraceEvent, retainedBytes *int) {

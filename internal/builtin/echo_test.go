@@ -20,8 +20,8 @@ func TestEchoEscapesMatchBashBytes(t *testing.T) {
 			{Kind: runtime.ArgumentString, Value: "-en"},
 			{Kind: runtime.ArgumentString, Value: input},
 		}}, 1024)
-		if err != nil || string(result.Stdout) != want {
-			t.Fatalf("echo %q = %q, %v; want %q", input, result.Stdout, err, want)
+		if err != nil || string(result.Stdout.Value) != want {
+			t.Fatalf("echo %q = %q, %v; want %q", input, result.Stdout.Value, err, want)
 		}
 	}
 }

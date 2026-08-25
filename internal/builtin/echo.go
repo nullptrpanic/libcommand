@@ -14,17 +14,14 @@ func init() {
 }
 
 func executeEchoCommand(ctx context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
-	result, err := executeEcho(ctx, invocation, shell.MaxMemoryBytes())
+	output, err := executeEcho(ctx, invocation, shell.MaxMemoryBytes())
 	if err != nil {
 		return nil, err
 	}
-	if result.AllUnresolved() {
-		return shell.ResultUnknown(&runtime.CommandResult{}, true, false, false), nil
-	}
-	return result, nil
+	return shell.Result(output), nil
 }
 
-func executeEcho(ctx context.Context, invocation *runtime.Invocation, maximum int) (*runtime.CommandResult, error) {
+func executeEcho(ctx context.Context, invocation *runtime.Invocation, maximum int) (*runtime.CommandOutput, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -32,7 +29,7 @@ func executeEcho(ctx context.Context, invocation *runtime.Invocation, maximum in
 	total := 0
 	for index, argument := range invocation.Args {
 		if argument.Kind != runtime.ArgumentString {
-			return runtime.NewUnresolvedResult(), nil
+			return uncertainCommandOutput(nil, nil, 0, true, false, false), nil
 		}
 		var ok bool
 		total, ok = materialize.Add(total, len(argument.Value), maximum)
@@ -64,7 +61,7 @@ func executeEcho(ctx context.Context, invocation *runtime.Invocation, maximum in
 		}
 		output += "\n"
 	}
-	return &runtime.CommandResult{Stdout: []byte(output)}, nil
+	return commandOutput([]byte(output), nil, 0), nil
 }
 
 func parseEchoOptions(args []string) (newline, escapes bool, remaining []string) {

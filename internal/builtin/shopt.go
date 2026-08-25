@@ -24,7 +24,7 @@ func init() {
 func executeShopt(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	mode := 0
 	query := false
@@ -41,7 +41,7 @@ func executeShopt(_ context.Context, shell *runtime.CommandContext, invocation *
 			index++
 			goto options
 		default:
-			return &runtime.CommandResult{Stderr: []byte("shopt: invalid option\n"), ExitCode: 2}, nil
+			return commandResult(shell, nil, []byte("shopt: invalid option\n"), 2), nil
 		}
 		index++
 	}
@@ -57,7 +57,7 @@ options:
 	for _, name := range names {
 		enabled, exists := shell.Option(name)
 		if !exists || !isShoptOption(name) {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("shopt: %s: invalid shell option name\n", name)), ExitCode: 1}, nil
+			return commandResult(shell, nil, []byte(fmt.Sprintf("shopt: %s: invalid shell option name\n", name)), 1), nil
 		}
 		if listMode {
 			if enabled == (mode > 0) && !query {
@@ -80,7 +80,7 @@ options:
 		}
 		shell.SetOption(name, mode > 0)
 	}
-	return &runtime.CommandResult{Stdout: []byte(output.String()), ExitCode: exitCode}, nil
+	return commandResult(shell, []byte(output.String()), nil, exitCode), nil
 }
 
 func isShoptOption(name string) bool {

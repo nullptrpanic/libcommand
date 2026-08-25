@@ -19,7 +19,7 @@ func executeSudo(_ context.Context, shell *runtime.CommandContext, invocation *r
 	for index < len(arguments) {
 		value, ok := wrapperArgument(invocation, index)
 		if !ok {
-			return unresolvedWrapper()
+			return unresolvedWrapper(shell)
 		}
 		if value == "--" {
 			index++
@@ -28,7 +28,7 @@ func executeSudo(_ context.Context, shell *runtime.CommandContext, invocation *r
 		if value == "-u" || value == "--user" || value == "-g" || value == "--group" || value == "-p" || value == "--prompt" || value == "-C" || value == "--close-from" || value == "-T" || value == "--command-timeout" || value == "-h" || value == "--host" {
 			next, ok := wrapperArgument(invocation, index+1)
 			if !ok {
-				return unresolvedWrapper()
+				return unresolvedWrapper(shell)
 			}
 			if value == "-u" || value == "--user" {
 				user = next
@@ -59,10 +59,10 @@ func executeSudo(_ context.Context, shell *runtime.CommandContext, invocation *r
 			continue
 		}
 		if value == "-i" || value == "--login" || value == "-s" || value == "--shell" || value == "-D" || value == "--chdir" || value == "-R" || value == "--chroot" || value == "-l" || value == "--list" || value == "-v" || value == "--validate" || value == "-k" || value == "--reset-timestamp" || value == "-K" || value == "--remove-timestamp" || value == "-V" || value == "--version" || value == "--help" {
-			return unresolvedWrapper()
+			return unresolvedWrapper(shell)
 		}
 		if strings.HasPrefix(value, "-") {
-			return unresolvedWrapper()
+			return unresolvedWrapper(shell)
 		}
 		break
 	}
@@ -71,7 +71,7 @@ func executeSudo(_ context.Context, shell *runtime.CommandContext, invocation *r
 	for index < len(arguments) {
 		value, ok := wrapperArgument(invocation, index)
 		if !ok {
-			return unresolvedWrapper()
+			return unresolvedWrapper(shell)
 		}
 		name, value, assignment := strings.Cut(value, "=")
 		if !assignment || !syntax.ValidName(name) {
@@ -81,7 +81,7 @@ func executeSudo(_ context.Context, shell *runtime.CommandContext, invocation *r
 		index++
 	}
 	if user == "" {
-		return unresolvedWrapper()
+		return unresolvedWrapper(shell)
 	}
 	if err := shell.ChangeUser(user); err != nil {
 		return nil, err

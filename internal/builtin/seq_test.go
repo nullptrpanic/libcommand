@@ -36,7 +36,7 @@ func TestSeqGeneratesIntegerRanges(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.ExitCode != 0 || string(result.Stdout) != test.stdout || len(result.Stderr) != 0 {
+			if result.ExitCode.Value != 0 || string(result.Stdout.Value) != test.stdout || len(result.Stderr.Value) != 0 {
 				t.Fatalf("result = %#v, want stdout %q", result, test.stdout)
 			}
 		})
@@ -60,7 +60,7 @@ func TestSeqRejectsInvalidArguments(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.ExitCode != 1 || len(result.Stdout) != 0 || string(result.Stderr) != test.stderr {
+			if result.ExitCode.Value != 1 || len(result.Stdout.Value) != 0 || string(result.Stderr.Value) != test.stderr {
 				t.Fatalf("result = %#v, want stderr %q", result, test.stderr)
 			}
 		})
@@ -82,7 +82,7 @@ func TestSeqHonorsMaterializationLimit(t *testing.T) {
 		Args: []*runtime.Argument{{Kind: runtime.ArgumentString, Value: "3"}},
 	}
 	result, err := executeSeq(context.Background(), invocation, 6)
-	if err != nil || string(result.Stdout) != "1\n2\n3\n" {
+	if err != nil || string(result.Stdout.Value) != "1\n2\n3\n" {
 		t.Fatalf("exact limit result = %#v, error = %v", result, err)
 	}
 	result, err = executeSeq(context.Background(), invocation, 5)
@@ -91,7 +91,7 @@ func TestSeqHonorsMaterializationLimit(t *testing.T) {
 	}
 }
 
-func runSeq(ctx context.Context, args []string) (*runtime.CommandResult, error) {
+func runSeq(ctx context.Context, args []string) (*runtime.CommandOutput, error) {
 	arguments := make([]*runtime.Argument, len(args))
 	for index, argument := range args {
 		arguments[index] = &runtime.Argument{Kind: runtime.ArgumentString, Value: argument}

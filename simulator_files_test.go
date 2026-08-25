@@ -9,9 +9,9 @@ import (
 
 func TestSimulatorLoadsInitialFilesRelativeToWorkingDirectory(t *testing.T) {
 	var got []string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		got = argumentStrings(t, invocation)
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 
 	err := simulator.Simulate(context.Background(), &SimulationRequest{
@@ -36,9 +36,9 @@ lark-cli "$PWD" "$TOKEN" "$GLOBAL" "$(<data/value.txt)"`,
 
 func TestSimulatorDefaultsInitialFilesToRootWorkingDirectory(t *testing.T) {
 	var got []string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		got = argumentStrings(t, invocation)
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 
 	err := simulator.Simulate(context.Background(), &SimulationRequest{
@@ -56,9 +56,9 @@ func TestSimulatorDefaultsInitialFilesToRootWorkingDirectory(t *testing.T) {
 
 func TestSimulatorResolvesRelativeWorkingDirectoryFromRoot(t *testing.T) {
 	var got string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		got = invocation.Dir
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 
 	err := simulator.Simulate(context.Background(), &SimulationRequest{

@@ -30,7 +30,6 @@ type State struct {
 	fs                  *memoryFS
 	issue               error
 	exitStatus          *uncertain[int]
-	exitFailure         *State
 	pipelineStatuses    *uncertain[[]string]
 	options             shellOptions
 	signal              controlSignal
@@ -91,11 +90,6 @@ type savedVariable struct {
 type substitutionResult struct {
 	stdout     *uncertain[[]byte]
 	exitStatus *uncertain[int]
-}
-
-type substitutionFailure struct {
-	state  *State
-	stdout *uncertain[[]byte]
 }
 
 type substitutionFrame struct {
@@ -214,7 +208,6 @@ func (s *State) clone() *State {
 		fs:                  s.fs.clone(),
 		issue:               s.issue,
 		exitStatus:          s.exitStatus,
-		exitFailure:         s.exitFailure,
 		pipelineStatuses:    s.pipelineStatuses,
 		options:             s.options,
 		signal:              s.signal,
@@ -331,7 +324,6 @@ func (s *State) setExitStatus(exitCode int, unresolved bool) {
 	} else {
 		s.exitStatus = newCertain(exitCode)
 	}
-	s.exitFailure = nil
 	s.setPipelineStatusValues([]string{strconv.Itoa(exitCode)}, unresolved)
 }
 
@@ -351,18 +343,6 @@ func (s *State) pipelineStatusValues() ([]string, bool) {
 		return []string{strconv.Itoa(exitCode)}, exitUnresolved
 	}
 	return append([]string(nil), values...), unresolved
-}
-
-func (s *State) snapshotForUnknownFailure() *State {
-	failure := s.clone()
-	failure.exitFailure = nil
-	return failure
-}
-
-func (s *State) setUnknownExitCodeWithFailure(failure *State) {
-	s.exitStatus = newUnresolved(0)
-	s.exitFailure = failure
-	s.setPipelineStatusValues([]string{"0"}, true)
 }
 
 func (s *State) resetOutput() {
@@ -475,7 +455,6 @@ func popSubstitutionFrameTree(s *State, visited map[*State]struct{}) {
 		return
 	}
 	visited[s] = struct{}{}
-	popSubstitutionFrameTree(s.exitFailure, visited)
 	if len(s.substitutionFrames) != 0 {
 		s.popSubstitutionFrame()
 	}

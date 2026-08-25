@@ -102,10 +102,7 @@ func executeShell(_ context.Context, shell *runtime.CommandContext, invocation *
 	filename := shell.ResolvePath(program.Name)
 	contents, unknown, exists := shell.ReadFile(filename)
 	if !exists {
-		return &runtime.CommandResult{
-			Stderr:   []byte(fmt.Sprintf("%s: %s: No such file or directory\n", name, program.Name)),
-			ExitCode: 127,
-		}, nil
+		return commandResult(shell, nil, []byte(fmt.Sprintf("%s: %s: No such file or directory\n", name, program.Name)), 127), nil
 	}
 	if unknown {
 		return shell.StopUnresolved(fmt.Sprintf("%s script contents depend on unresolved command output", name)), nil

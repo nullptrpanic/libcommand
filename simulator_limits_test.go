@@ -249,9 +249,9 @@ func TestExecutionLimitDoesNotChangeRequestSemantics(t *testing.T) {
 	var got []string
 	simulator := NewBuilder().
 		Limits(&Limits{MaxExecutionSteps: 1}).
-		Command("record", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			got = argumentStrings(t, invocation)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	err := simulator.Simulate(context.Background(), &SimulationRequest{

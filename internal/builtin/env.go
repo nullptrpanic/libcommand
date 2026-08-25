@@ -25,7 +25,7 @@ func executeEnv(ctx context.Context, shell *runtime.CommandContext, invocation *
 	for index < len(arguments) {
 		argument := arguments[index]
 		if argument.Kind != runtime.ArgumentString {
-			return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+			return unresolvedStderrCommandResult(shell, 1), nil
 		}
 		if argument.Value == "--" {
 			index++
@@ -38,7 +38,7 @@ func executeEnv(ctx context.Context, shell *runtime.CommandContext, invocation *
 		}
 		if argument.Value == "-u" || argument.Value == "--unset" {
 			if index+1 >= len(arguments) || arguments[index+1].Kind != runtime.ArgumentString {
-				return &runtime.CommandResult{Stderr: []byte("env: option requires an argument\n"), ExitCode: 1}, nil
+				return commandResult(shell, nil, []byte("env: option requires an argument\n"), 1), nil
 			}
 			unset = append(unset, arguments[index+1].Value)
 			index += 2
@@ -55,19 +55,19 @@ func executeEnv(ctx context.Context, shell *runtime.CommandContext, invocation *
 		index++
 	}
 	if index == len(arguments) {
-		result, stdoutUnknown, err := environmentOutput(ctx, shell, clearEnvironment, unset, assignments)
+		stdout, stdoutUnknown, err := environmentOutput(ctx, shell, clearEnvironment, unset, assignments)
 		if err != nil {
 			return nil, err
 		}
-		return shell.ResultUnknown(result, stdoutUnknown, false, false), nil
+		return uncertainCommandResult(shell, stdout, nil, 0, stdoutUnknown, false, false), nil
 	}
 	if arguments[index].Kind != runtime.ArgumentString {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	return shell.InvokeWithEnvironment(arguments[index].Value, arguments[index+1:], clearEnvironment, unset, assignments), nil
 }
 
-func environmentOutput(ctx context.Context, shell *runtime.CommandContext, clear bool, unset []string, assignments map[string]string) (*runtime.CommandResult, bool, error) {
+func environmentOutput(ctx context.Context, shell *runtime.CommandContext, clear bool, unset []string, assignments map[string]string) ([]byte, bool, error) {
 	values := make(map[string]string)
 	unknown := make(map[string]bool)
 	if !clear {
@@ -115,5 +115,5 @@ func environmentOutput(ctx context.Context, shell *runtime.CommandContext, clear
 		output = append(output, values[name]...)
 		output = append(output, '\n')
 	}
-	return &runtime.CommandResult{Stdout: output}, outputUnknown, nil
+	return output, outputUnknown, nil
 }

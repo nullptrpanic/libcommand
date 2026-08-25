@@ -106,9 +106,9 @@ func TestMaterializedExpansionStopsBeforeDispatch(t *testing.T) {
 		MaxMemoryBytes:    64, LookupCommand: lookupCommands(func(name string) bool {
 			return name == "record"
 		},
-			func(context.Context, *State, *Invocation) (*CommandResult, error) {
+			func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 				dispatches++
-				return &CommandResult{}, nil
+				return resultForTest(state, nil, nil, 0), nil
 			}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "maximum materialized byte count 64 reached") {
@@ -284,18 +284,6 @@ func assertStateMetadataMaterializationCaches(t testing.TB, s *State) {
 	}
 }
 
-func TestCorrelatedFailureStateCountsTowardMaterializationLimit(t *testing.T) {
-	e, s := newNoOpExecutor(context.Background(), 10, &Request{})
-	failure := s.snapshotForUnknownFailure()
-	failure.vars.put("retained", expand.Variable{Set: true, Kind: expand.String, Str: strings.Repeat("x", 256)})
-	s.setUnknownExitCodeWithFailure(failure)
-	e.config.MaxMemoryBytes = 128
-
-	if err := e.checkStateMaterialization(s); err == nil || !strings.Contains(err.Error(), "maximum materialized byte count 128 reached") {
-		t.Fatalf("checkStateMaterialization() error = %v", err)
-	}
-}
-
 func assertSubstitutionMaterializationCache(t testing.TB, s *State) {
 	t.Helper()
 	total := 0
@@ -456,9 +444,9 @@ func TestAggregateActivePathsStopBeforeDispatch(t *testing.T) {
 		MaxMemoryBytes:    160, LookupCommand: lookupCommands(func(name string) bool {
 			return name == "record"
 		},
-			func(context.Context, *State, *Invocation) (*CommandResult, error) {
+			func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 				dispatches++
-				return &CommandResult{}, nil
+				return resultForTest(state, nil, nil, 0), nil
 			}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "maximum materialized byte count 160 reached") {
@@ -483,9 +471,9 @@ inflate
 		MaxMemoryBytes:    maximum, LookupCommand: lookupCommands(func(name string) bool {
 			return name == "inflate"
 		},
-			func(context.Context, *State, *Invocation) (*CommandResult, error) {
+			func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 				dispatches++
-				return &CommandResult{Stdout: stdout}, nil
+				return resultForTest(state, stdout, nil, 0), nil
 			}),
 	})
 	if err == nil || !strings.Contains(err.Error(), "maximum materialized byte count 32768 reached") {
@@ -493,6 +481,71 @@ inflate
 	}
 	if dispatches != 1 {
 		t.Fatalf("dispatches = %d, want 1", dispatches)
+	}
+}
+
+func TestCommandResultMaterializationCountsEveryOutput(t *testing.T) {
+	_, state := newNoOpExecutor(context.Background(), 10, &Request{})
+	maximum := materialize.EntryBytes + 10
+	result := &CommandResult{}
+	result.AddOutput(state, &CommandOutput{
+		Stdout:   Resolved([]byte("123456")),
+		Stderr:   Resolved[[]byte](nil),
+		ExitCode: Resolved(0),
+	})
+	if err := validateCommandResultMaterialization(result, maximum); err != nil {
+		t.Fatalf("one output validation error = %v", err)
+	}
+	result.AddOutput(state.clone(), &CommandOutput{
+		Stdout:   Resolved([]byte("abcdef")),
+		Stderr:   Resolved[[]byte](nil),
+		ExitCode: Resolved(0),
+	})
+	if err := validateCommandResultMaterialization(result, maximum); err == nil {
+		t.Fatal("two outputs validation error = nil, want aggregate materialization failure")
+	}
+}
+
+func TestCommandResultMaterializationCountsEveryOutputState(t *testing.T) {
+	_, state := newNoOpExecutor(context.Background(), 10, &Request{})
+	if err := state.SetVariable("VALUE", strings.Repeat("x", 128)); err != nil {
+		t.Fatal(err)
+	}
+	stateBytes, ok := stateMaterialization(state)
+	if !ok || stateBytes <= state.initialBytes {
+		t.Fatalf("state materialization = %d, %t; baseline = %d", stateBytes, ok, state.initialBytes)
+	}
+	maximum := materialize.EntryBytes + stateBytes - state.initialBytes
+	result := &CommandResult{}
+	result.AddOutput(state, &CommandOutput{
+		Stdout:   Resolved[[]byte](nil),
+		Stderr:   Resolved[[]byte](nil),
+		ExitCode: Resolved(0),
+	})
+	if err := validateCommandResultMaterialization(result, maximum); err != nil {
+		t.Fatalf("one state validation error = %v", err)
+	}
+	result.AddOutput(state.clone(), &CommandOutput{
+		Stdout:   Resolved[[]byte](nil),
+		Stderr:   Resolved[[]byte](nil),
+		ExitCode: Resolved(0),
+	})
+	if err := validateCommandResultMaterialization(result, maximum); err == nil {
+		t.Fatal("two state validation error = nil, want aggregate materialization failure")
+	}
+}
+
+func TestApplyingCommandOutputsReleasesResultStateReferences(t *testing.T) {
+	execution, state := newNoOpExecutor(context.Background(), 10, &Request{})
+	command := &CommandContext{execution: execution, state: state, source: unknownLocation}
+	result := command.Result(command.Output().Build())
+	output := result.outputs[0]
+	paths := command.applyOutputs(result)
+	if len(paths) != 1 || paths[0].state != state {
+		t.Fatalf("paths = %#v, want one path with original state", paths)
+	}
+	if output.state != nil {
+		t.Fatal("applied output still retains its state")
 	}
 }
 

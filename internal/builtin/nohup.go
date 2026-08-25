@@ -16,12 +16,12 @@ func executeNohup(_ context.Context, shell *runtime.CommandContext, invocation *
 	if len(invocation.Args) != 0 {
 		value, ok := wrapperArgument(invocation, 0)
 		if !ok {
-			return unresolvedWrapper()
+			return unresolvedWrapper(shell)
 		}
 		if value == "--" {
 			index++
 		} else if strings.HasPrefix(value, "-") && value != "-" {
-			return unresolvedWrapper()
+			return unresolvedWrapper(shell)
 		}
 	}
 	return invokeExternalWrapper(shell, invocation, index, nil)

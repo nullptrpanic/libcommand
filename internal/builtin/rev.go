@@ -14,18 +14,22 @@ func init() {
 }
 
 func executeRevCommand(ctx context.Context, command *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
-	return executeRev(ctx, invocation, command.MaxMemoryBytes())
+	output, err := executeRev(ctx, invocation, command.MaxMemoryBytes())
+	if err != nil {
+		return nil, err
+	}
+	return command.Result(output), nil
 }
 
-func executeRev(ctx context.Context, invocation *runtime.Invocation, maximum int) (*runtime.CommandResult, error) {
+func executeRev(ctx context.Context, invocation *runtime.Invocation, maximum int) (*runtime.CommandOutput, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if len(invocation.Args) != 0 {
-		return revFailure("rev: file operands are not supported\n"), nil
+		return commandOutput(nil, []byte("rev: file operands are not supported\n"), 1), nil
 	}
 	if invocation.Unresolved != nil && invocation.Unresolved.Stdin {
-		return runtime.NewUnresolvedResult(), nil
+		return unresolvedCommandOutput(), nil
 	}
 	if _, ok := materialize.Add(0, len(invocation.Stdin), maximum); !ok {
 		return nil, materialize.LimitError(maximum)
@@ -50,7 +54,7 @@ func executeRev(ctx context.Context, invocation *runtime.Invocation, maximum int
 		stdout = append(stdout, '\n')
 		remaining = remaining[lineEnd+1:]
 	}
-	return &runtime.CommandResult{Stdout: stdout}, nil
+	return commandOutput(stdout, nil, 0), nil
 }
 
 func appendReversedRunes(ctx context.Context, destination, source []byte) ([]byte, error) {
@@ -67,8 +71,4 @@ func appendReversedRunes(ctx context.Context, destination, source []byte) ([]byt
 		iterations++
 	}
 	return destination, nil
-}
-
-func revFailure(message string) *runtime.CommandResult {
-	return &runtime.CommandResult{Stderr: []byte(message), ExitCode: 1}
 }

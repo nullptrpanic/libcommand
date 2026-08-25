@@ -63,7 +63,6 @@ func restoreSavedAssignments(paths []*pathResult, saved map[string]*savedVariabl
 				current.vars.delete(name)
 			}
 		}
-		restore(current.exitFailure)
 	}
 	for _, path := range paths {
 		restore(path.state)

@@ -62,7 +62,6 @@ func (c *CommandContext) restoreUser(paths []*pathResult) {
 		}
 		visited[state] = struct{}{}
 		state.user = c.originalUser
-		states = append(states, state.exitFailure)
 	}
 }
 
@@ -79,33 +78,62 @@ func (c *CommandContext) Redirects() []*Redirect {
 	return c.redirects
 }
 
-// ResultUnknown marks independently unknown output and exit dimensions.
-func (c *CommandContext) ResultUnknown(result *CommandResult, stdout, stderr, exit bool) *CommandResult {
-	if result == nil {
-		result = &CommandResult{}
-	}
-	result.stdoutUnknown = stdout
-	result.stderrUnknown = stderr
-	result.exitUnknown = exit
+// Output returns a builder initialized with resolved empty streams and exit
+// code zero.
+func (c *CommandContext) Output() *CommandOutputBuilder {
+	return &CommandOutputBuilder{output: CommandOutput{
+		Stdout:   Resolved[[]byte](nil),
+		Stderr:   Resolved[[]byte](nil),
+		ExitCode: Resolved(0),
+	}}
+}
+
+// Stdout sets the stdout value for this output.
+func (b *CommandOutputBuilder) Stdout(value *Uncertain[[]byte]) *CommandOutputBuilder {
+	b.output.Stdout = value
+	return b
+}
+
+// Stderr sets the stderr value for this output.
+func (b *CommandOutputBuilder) Stderr(value *Uncertain[[]byte]) *CommandOutputBuilder {
+	b.output.Stderr = value
+	return b
+}
+
+// ExitCode sets the exit-code value for this output.
+func (b *CommandOutputBuilder) ExitCode(value *Uncertain[int]) *CommandOutputBuilder {
+	b.output.ExitCode = value
+	return b
+}
+
+// Build captures the configured output.
+func (b *CommandOutputBuilder) Build() *CommandOutput {
+	output := b.output
+	return &output
+}
+
+// Result binds one output to the active state without cloning it.
+func (c *CommandContext) Result(output *CommandOutput) *CommandResult {
+	result := c.NewResult()
+	result.AddOutput(c.state, output)
 	return result
 }
 
-// UnresolvedResult returns a command result whose output streams and exit
-// status are all unresolved.
-func (c *CommandContext) UnresolvedResult() *CommandResult {
-	return NewUnresolvedResult()
+// NewResult returns an empty result to which branch outputs can be added.
+func (c *CommandContext) NewResult() *CommandResult {
+	return &CommandResult{}
 }
 
-// ResultCurrentExit appends output without replacing an exit status already
-// established through State.
-func (c *CommandContext) ResultCurrentExit(result *CommandResult, stdoutUnknown, stderrUnknown bool) *CommandResult {
-	if result == nil {
-		result = &CommandResult{}
-	}
-	result.stdoutUnknown = stdoutUnknown
-	result.stderrUnknown = stderrUnknown
-	result.preserveExit = true
-	return result
+// ForkState clones the active state for one possible command outcome.
+func (c *CommandContext) ForkState() *State {
+	return c.state.clone()
+}
+
+// AddOutput binds one output to the exact state supplied by the caller.
+func (r *CommandResult) AddOutput(state *State, output *CommandOutput) {
+	captured := *output
+	captured.state = state
+	r.outputs = append(r.outputs, &captured)
 }
 
 // StopUnresolved stops the current path because required Shell semantics

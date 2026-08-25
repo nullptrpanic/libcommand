@@ -45,7 +45,7 @@ func recordingCommand(calls *[][]string, inspect func(*runtime.CommandContext, *
 			if inspect != nil {
 				inspect(execution, invocation)
 			}
-			return &runtime.CommandResult{}, nil
+			return execution.Result(execution.Output().Build()), nil
 		},
 	}
 }
@@ -56,7 +56,7 @@ func TestEnvUsesUserCommandAndFallbackDispatch(t *testing.T) {
 		return &runtime.CommandDefinition{
 			Command: func(_ context.Context, execution *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 				calls = append(calls, label+":"+invocation.Name)
-				return &runtime.CommandResult{}, nil
+				return execution.Result(execution.Output().Build()), nil
 			},
 			UserOverride: true,
 		}
@@ -184,7 +184,7 @@ func TestCDSearchesKnownCDPATH(t *testing.T) {
 			if err := execution.AssignVariable("CDPATH", &expand.Variable{Set: true, Kind: expand.String, Str: "/candidate"}, false); err != nil {
 				return nil, err
 			}
-			return &runtime.CommandResult{}, nil
+			return execution.Result(execution.Output().Build()), nil
 		},
 	}
 	err := executeBuiltinScript(t, `prepare; cd target; record "$PWD"`, &runtime.Request{}, map[string]*runtime.CommandDefinition{
@@ -218,7 +218,7 @@ func TestCDPreservesUnknownCDPATHDependency(t *testing.T) {
 			if err := execution.AssignVariable("CDPATH", &expand.Variable{Set: true, Kind: expand.String, Str: "/candidate"}, true); err != nil {
 				return nil, err
 			}
-			return &runtime.CommandResult{}, nil
+			return execution.Result(execution.Output().Build()), nil
 		},
 	}
 	err := executeBuiltinScript(t, `prepare; cd target; record`, &runtime.Request{}, map[string]*runtime.CommandDefinition{

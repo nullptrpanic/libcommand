@@ -18,7 +18,7 @@ func init() {
 func executeUnset(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	functions := false
 	options := true
@@ -36,17 +36,17 @@ func executeUnset(_ context.Context, shell *runtime.CommandContext, invocation *
 			continue
 		}
 		if options && strings.HasPrefix(argument, "-") {
-			return &runtime.CommandResult{Stderr: []byte("unset: unsupported option\n"), ExitCode: 2}, nil
+			return commandResult(shell, nil, []byte("unset: unsupported option\n"), 2), nil
 		}
 		if functions {
 			shell.DeleteFunction(argument)
 			continue
 		}
 		if err := unsetShellTarget(shell, argument); err != nil {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("unset: `%s': %v\n", argument, err)), ExitCode: 1}, nil
+			return commandResult(shell, nil, []byte(fmt.Sprintf("unset: `%s': %v\n", argument, err)), 1), nil
 		}
 	}
-	return &runtime.CommandResult{}, nil
+	return commandResult(shell, nil, nil, 0), nil
 }
 
 func unsetShellTarget(shell *runtime.CommandContext, target string) error {

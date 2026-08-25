@@ -33,11 +33,155 @@ func TestPublicUnifiedCommandAPI(t *testing.T) {
 	var _ func(*libcommand.CommandContext, string) error = (*libcommand.CommandContext).ChangeUser
 
 	var command libcommand.Command = func(_ context.Context, current *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
-		return &libcommand.CommandResult{Stdout: []byte(current.State().Directory())}, nil
+		return externalCommandResult(current, []byte(current.State().Directory()), nil, 0), nil
 	}
 	simulator := libcommand.NewBuilder().Command("inspect", command).Build()
 	if err := simulator.Simulate(context.Background(), &libcommand.SimulationRequest{Source: "inspect"}); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestPublicCommandOutputBuilderDefaults(t *testing.T) {
+	simulator := libcommand.NewBuilder().
+		Command("partial", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return command.Result(command.Output().
+				Stdout(libcommand.Unresolved([]byte("prefix"))).
+				Build()), nil
+		}).
+		Build()
+
+	var completed *libcommand.TracePathResult
+	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{Source: "partial"}, func(event *libcommand.TraceEvent) bool {
+		if event.Kind == libcommand.TracePathCompleted {
+			completed = event.PathResult
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if completed == nil {
+		t.Fatal("completed path result is nil")
+	}
+	if completed.Stdout != "prefix" || !completed.StdoutUnresolved {
+		t.Fatalf("stdout = %q, unresolved = %t; want representative prefix marked unresolved", completed.Stdout, completed.StdoutUnresolved)
+	}
+	if completed.Stderr != "" || completed.StderrUnresolved {
+		t.Fatalf("stderr = %q, unresolved = %t; want resolved empty stderr", completed.Stderr, completed.StderrUnresolved)
+	}
+	if completed.ExitCode != 0 || completed.ExitCodeUnresolved {
+		t.Fatalf("exit code = %d, unresolved = %t; want resolved zero", completed.ExitCode, completed.ExitCodeUnresolved)
+	}
+}
+
+func TestPublicCommandResultForksStateOutputs(t *testing.T) {
+	var calls []string
+	var pathIDs []uint64
+	var parentIDs []uint64
+	var parentPointers []uintptr
+	simulator := libcommand.NewBuilder().
+		Command("choose", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			success := command.ForkState()
+			if err := success.SetVariable("VALUE", "success"); err != nil {
+				return nil, err
+			}
+			failure := command.ForkState()
+			if err := failure.SetVariable("VALUE", "failure"); err != nil {
+				return nil, err
+			}
+
+			result := command.NewResult()
+			result.AddOutput(success, command.Output().
+				ExitCode(libcommand.Resolved(0)).
+				Build())
+			result.AddOutput(failure, command.Output().
+				ExitCode(libcommand.Resolved(1)).
+				Build())
+			return result, nil
+		}).
+		Command("record", func(_ context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			if len(invocation.Args) != 1 || invocation.Args[0].Kind != libcommand.ArgumentString {
+				t.Fatalf("record arguments = %#v, want one concrete argument", invocation.Args)
+			}
+			calls = append(calls, invocation.Args[0].Value)
+			state := command.State()
+			pathIDs = append(pathIDs, state.PathID())
+			parent := state.Parent()
+			if parent == nil {
+				parentIDs = append(parentIDs, 0)
+				parentPointers = append(parentPointers, 0)
+			} else {
+				parentIDs = append(parentIDs, parent.PathID())
+				parentPointers = append(parentPointers, reflect.ValueOf(parent).Pointer())
+			}
+			return command.Result(command.Output().Build()), nil
+		}).
+		Build()
+
+	source := `choose
+status=$?
+:
+if (( status == 0 )); then
+  record "success:$VALUE"
+else
+  record "failure:$VALUE"
+fi`
+	if err := simulator.Simulate(context.Background(), &libcommand.SimulationRequest{Source: source}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"success:success", "failure:failure"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+	if len(pathIDs) != 2 || pathIDs[0] == 0 || pathIDs[0] == pathIDs[1] {
+		t.Fatalf("path IDs = %#v, want two distinct nonzero paths", pathIDs)
+	}
+	if len(parentIDs) != 2 || parentIDs[0] == 0 || parentIDs[0] != parentIDs[1] || parentPointers[0] == 0 || parentPointers[0] != parentPointers[1] {
+		t.Fatalf("parents = %#v pointers %#v, want one shared nonzero parent snapshot", parentIDs, parentPointers)
+	}
+}
+
+func TestPublicCommandResultTraceAggregatesStateOutputs(t *testing.T) {
+	simulator := libcommand.NewBuilder().
+		Command("choose", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			result := command.NewResult()
+			result.AddOutput(command.ForkState(), command.Output().
+				Stdout(libcommand.Resolved([]byte("first"))).
+				Stderr(libcommand.Resolved([]byte("first-error"))).
+				ExitCode(libcommand.Resolved(0)).
+				Build())
+			result.AddOutput(command.ForkState(), command.Output().
+				Stdout(libcommand.Resolved([]byte("second"))).
+				Stderr(libcommand.Resolved([]byte("second-error"))).
+				ExitCode(libcommand.Resolved(1)).
+				Build())
+			return result, nil
+		}).
+		Build()
+
+	var traced *libcommand.TraceCommandResult
+	err := simulator.SimulateTraceWithOptions(context.Background(), &libcommand.SimulationRequest{Source: "choose"}, &libcommand.TraceOptions{
+		StateSnapshots:   true,
+		MaxSnapshotBytes: 1 << 20,
+	}, func(event *libcommand.TraceEvent) bool {
+		if event.Kind == libcommand.TraceCommandFinished {
+			traced = event.CommandResult
+		}
+		return true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if traced == nil {
+		t.Fatal("traced command result is nil")
+	}
+	if traced.Stdout != "first" || traced.StdoutBytes != len("first") || !traced.StdoutUnresolved {
+		t.Fatalf("traced stdout = %#v", traced)
+	}
+	if traced.Stderr != "first-error" || traced.StderrBytes != len("first-error") || !traced.StderrUnresolved {
+		t.Fatalf("traced stderr = %#v", traced)
+	}
+	if traced.ExitCode != 0 || !traced.ExitCodeUnresolved || !traced.Unresolved {
+		t.Fatalf("traced exit status = %#v", traced)
 	}
 }
 
@@ -51,7 +195,7 @@ func TestCommandContextExposesExpandedRedirects(t *testing.T) {
 				redirects = append(redirects, &copied)
 			}
 			got = append(got, redirects)
-			return &libcommand.CommandResult{}, nil
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).
 		Build()
 	source := `target=$(printf '%s' L2Rldi90Y3AvMTAuMC4wLjEvNDQ0NA== | base64 -d)
@@ -87,9 +231,9 @@ func TestPublicAPI(t *testing.T) {
 	var _ func(*libcommand.Simulator, context.Context, *libcommand.SimulationRequest) error = (*libcommand.Simulator).Simulate
 
 	var got *libcommand.Invocation
-	handler := func(_ context.Context, _ *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+	handler := func(_ context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
 		got = invocation
-		return &libcommand.CommandResult{}, nil
+		return externalCommandResult(command, nil, nil, 0), nil
 	}
 
 	simulator := libcommand.NewBuilder().Command("lark-cli", handler).Build()
@@ -108,11 +252,11 @@ func TestPublicStateMutation(t *testing.T) {
 			if err := command.State().SetVariable("VALUE", "changed"); err != nil {
 				return nil, err
 			}
-			return &libcommand.CommandResult{}, nil
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).
 		Command("observe", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
 			observed, _, _ = command.State().Variable("VALUE")
-			return &libcommand.CommandResult{}, nil
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &libcommand.SimulationRequest{Source: "mutate; observe"}); err != nil {
@@ -141,7 +285,7 @@ func TestStatePathIdentityIsAvailableWithoutTrace(t *testing.T) {
 				parentIDs[label] = append(parentIDs[label], 0)
 				grandparentIDs[label] = append(grandparentIDs[label], 0)
 				parentPointers[label] = append(parentPointers[label], 0)
-				return &libcommand.CommandResult{}, nil
+				return externalCommandResult(command, nil, nil, 0), nil
 			}
 			parentIDs[label] = append(parentIDs[label], parent.PathID())
 			parentPointers[label] = append(parentPointers[label], reflect.ValueOf(parent).Pointer())
@@ -151,10 +295,10 @@ func TestStatePathIdentityIsAvailableWithoutTrace(t *testing.T) {
 			} else {
 				grandparentIDs[label] = append(grandparentIDs[label], grandparent.PathID())
 			}
-			return &libcommand.CommandResult{}, nil
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).
 		Command("maybe", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return command.ResultUnknown(&libcommand.CommandResult{}, false, false, true), nil
+			return externalUncertainCommandResult(command, nil, nil, 0, false, false, true), nil
 		}).
 		Build()
 
@@ -207,10 +351,10 @@ func TestStatePathIdentityForksBeforeSubstitutionContinuation(t *testing.T) {
 				parentID = parent.PathID()
 			}
 			parentIDs[label] = append(parentIDs[label], parentID)
-			return &libcommand.CommandResult{}, nil
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).
 		Command("maybe", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return command.ResultUnknown(&libcommand.CommandResult{}, false, false, true), nil
+			return externalUncertainCommandResult(command, nil, nil, 0, false, false, true), nil
 		}).
 		Build()
 
@@ -251,10 +395,10 @@ func TestParentStateIsFrozenAtFork(t *testing.T) {
 				return nil, err
 			}
 			observations++
-			return &libcommand.CommandResult{}, nil
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).
 		Command("maybe", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return command.ResultUnknown(&libcommand.CommandResult{}, false, false, true), nil
+			return externalUncertainCommandResult(command, nil, nil, 0, false, false, true), nil
 		}).
 		Build()
 
@@ -286,13 +430,13 @@ func onlyUintptr(t *testing.T, values map[string][]uintptr, label string) uintpt
 
 func TestBuilderUsesLastCommandRegistration(t *testing.T) {
 	var calls []string
-	first := func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
+	first := func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
 		calls = append(calls, "first")
-		return &libcommand.CommandResult{}, nil
+		return externalCommandResult(command, nil, nil, 0), nil
 	}
-	second := func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
+	second := func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
 		calls = append(calls, "second")
-		return &libcommand.CommandResult{}, nil
+		return externalCommandResult(command, nil, nil, 0), nil
 	}
 	simulator := libcommand.NewBuilder().
 		Command("record", first).
@@ -314,8 +458,8 @@ func TestBuilderCommandMiddlewareWrapsAllCommandKinds(t *testing.T) {
 			return next(ctx, command, invocation)
 		}
 	}
-	success := func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
-		return &libcommand.CommandResult{}, nil
+	success := func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+		return externalCommandResult(command, nil, nil, 0), nil
 	}
 
 	simulator := libcommand.NewBuilder().
@@ -348,9 +492,9 @@ func TestBuilderCommandMiddlewareUsesRegistrationOrder(t *testing.T) {
 
 	simulator := new(libcommand.Builder).
 		Middleware(middleware("first"), middleware("second")).
-		Command("record", func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
+		Command("record", func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
 			calls = append(calls, "command")
-			return &libcommand.CommandResult{}, nil
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &libcommand.SimulationRequest{Source: "record"}); err != nil {
@@ -363,8 +507,8 @@ func TestBuilderCommandMiddlewareUsesRegistrationOrder(t *testing.T) {
 }
 
 func TestBuilderAcceptsShellCommandNames(t *testing.T) {
-	handler := func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
-		return &libcommand.CommandResult{}, nil
+	handler := func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+		return externalCommandResult(command, nil, nil, 0), nil
 	}
 	for _, name := range []string{".", "[", "break", "builtin", "command", "continue", "declare", "eval", "exec", "exit", "export", "let", "local", "readonly", "return", "source", "test", "typeset"} {
 		t.Run(name, func(t *testing.T) {

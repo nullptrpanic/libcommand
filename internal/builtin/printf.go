@@ -23,9 +23,9 @@ func executePrintf(ctx context.Context, shell *runtime.CommandContext, invocatio
 	if !concrete {
 		arguments := invocation.Args
 		if len(arguments) == 0 || arguments[0].Kind != runtime.ArgumentString || arguments[0].Value != "-v" {
-			return shell.ResultUnknown(&runtime.CommandResult{}, true, true, true), nil
+			return unresolvedCommandResult(shell), nil
 		}
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	variableName := ""
 	if len(args) >= 2 && args[0] == "-v" {
@@ -36,14 +36,14 @@ func executePrintf(ctx context.Context, shell *runtime.CommandContext, invocatio
 	}
 	if variableName != "" {
 		if !syntax.ValidName(variableName) {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("printf: `%s': not a valid identifier\n", variableName)), ExitCode: 2}, nil
+			return commandResult(shell, nil, []byte(fmt.Sprintf("printf: `%s': not a valid identifier\n", variableName)), 2), nil
 		}
 		if shell.Variable(variableName).ReadOnly {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("printf: %s: readonly variable\n", variableName)), ExitCode: 1}, nil
+			return commandResult(shell, nil, []byte(fmt.Sprintf("printf: %s: readonly variable\n", variableName)), 1), nil
 		}
 	}
 	if len(args) == 0 {
-		return &runtime.CommandResult{Stderr: []byte("printf: missing format\n"), ExitCode: 2}, nil
+		return commandResult(shell, nil, []byte("printf: missing format\n"), 2), nil
 	}
 	format, remaining := args[0], args[1:]
 	var output strings.Builder
@@ -55,7 +55,7 @@ func executePrintf(ctx context.Context, shell *runtime.CommandContext, invocatio
 		}
 		preparedFormat, preparedArgs, consumed, warnings, stop, err := preparePrintfFormat(shell, format, remaining)
 		if err != nil {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("printf: %v\n", err)), ExitCode: 1}, nil
+			return commandResult(shell, nil, []byte(fmt.Sprintf("printf: %v\n", err)), 1), nil
 		}
 		for _, warning := range warnings {
 			diagnostic := fmt.Sprintf("printf: %s: invalid number\n", warning)
@@ -74,7 +74,7 @@ func executePrintf(ctx context.Context, shell *runtime.CommandContext, invocatio
 		}
 		value, err := shell.Format(preparedFormat, preparedArgs)
 		if err != nil {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("printf: %v\n", err)), ExitCode: 1}, nil
+			return commandResult(shell, nil, []byte(fmt.Sprintf("printf: %v\n", err)), 1), nil
 		}
 		if total, ok := materialize.Add(output.Len(), diagnostics.Len(), shell.MaxMemoryBytes()); !ok {
 			return nil, materialize.LimitError(shell.MaxMemoryBytes())
@@ -91,11 +91,11 @@ func executePrintf(ctx context.Context, shell *runtime.CommandContext, invocatio
 		shell.RecordVariableRollback(variableName)
 		value := &expand.Variable{Set: true, Kind: expand.String, Str: output.String()}
 		if err := shell.AssignVariable(variableName, value, false); err != nil {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("printf: %v\n", err)), ExitCode: 1}, nil
+			return commandResult(shell, nil, []byte(fmt.Sprintf("printf: %v\n", err)), 1), nil
 		}
-		return &runtime.CommandResult{Stderr: []byte(diagnostics.String()), ExitCode: exitCode}, nil
+		return commandResult(shell, nil, []byte(diagnostics.String()), exitCode), nil
 	}
-	return &runtime.CommandResult{Stdout: []byte(output.String()), Stderr: []byte(diagnostics.String()), ExitCode: exitCode}, nil
+	return commandResult(shell, []byte(output.String()), []byte(diagnostics.String()), exitCode), nil
 }
 
 func printfWidthWithinLimit(format string, maximum int) bool {

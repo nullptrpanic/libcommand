@@ -16,7 +16,7 @@ func executeStdbuf(_ context.Context, shell *runtime.CommandContext, invocation 
 	for index < len(invocation.Args) {
 		value, ok := wrapperArgument(invocation, index)
 		if !ok {
-			return unresolvedWrapper()
+			return unresolvedWrapper(shell)
 		}
 		if value == "--" {
 			index++
@@ -24,7 +24,7 @@ func executeStdbuf(_ context.Context, shell *runtime.CommandContext, invocation 
 		}
 		if value == "-i" || value == "-o" || value == "-e" || value == "--input" || value == "--output" || value == "--error" {
 			if _, ok := wrapperArgument(invocation, index+1); !ok {
-				return unresolvedWrapper()
+				return unresolvedWrapper(shell)
 			}
 			index += 2
 			continue
@@ -34,7 +34,7 @@ func executeStdbuf(_ context.Context, shell *runtime.CommandContext, invocation 
 			continue
 		}
 		if strings.HasPrefix(value, "-") && value != "-" {
-			return unresolvedWrapper()
+			return unresolvedWrapper(shell)
 		}
 		break
 	}

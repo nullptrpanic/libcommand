@@ -23,7 +23,10 @@ func executeLanguageControl(_ context.Context, command *CommandContext, invocati
 	arguments := invocation.Args
 	for _, argument := range arguments {
 		if argument.Kind != ArgumentString {
-			return command.ResultUnknown(&CommandResult{ExitCode: 1}, false, true, false), nil
+			return command.Result(command.Output().
+				Stderr(Unresolved[[]byte](nil)).
+				ExitCode(Resolved(1)).
+				Build()), nil
 		}
 	}
 
@@ -33,7 +36,10 @@ func executeLanguageControl(_ context.Context, command *CommandContext, invocati
 		if name == "exit" || name == "return" || (name == "break" || name == "continue") && state.loopDepth > 0 {
 			state.signal = signalExit
 		}
-		return &CommandResult{Stderr: []byte(name + ": too many arguments\n"), ExitCode: 1}, nil
+		return command.Result(command.Output().
+			Stderr(Resolved([]byte(name + ": too many arguments\n"))).
+			ExitCode(Resolved(1)).
+			Build()), nil
 	}
 
 	argument := 1
@@ -57,7 +63,10 @@ func executeLanguageControl(_ context.Context, command *CommandContext, invocati
 					state.signal = signalExit
 				}
 			}
-			return &CommandResult{Stderr: []byte(name + ": numeric argument required\n"), ExitCode: 2}, nil
+			return command.Result(command.Output().
+				Stderr(Resolved([]byte(name + ": numeric argument required\n"))).
+				ExitCode(Resolved(2)).
+				Build()), nil
 		}
 		if name == "return" || name == "exit" {
 			argument = int(value & 255)
@@ -68,34 +77,38 @@ func executeLanguageControl(_ context.Context, command *CommandContext, invocati
 		}
 	}
 
-	result := &CommandResult{ExitCode: argument}
+	var stderr []byte
+	exitCode := argument
 	switch name {
 	case "break", "continue":
 		if state.loopDepth == 0 {
-			result.Stderr = []byte(name + ": only meaningful in a loop\n")
-			result.ExitCode = 1
-			return result, nil
+			stderr = []byte(name + ": only meaningful in a loop\n")
+			exitCode = 1
+			break
 		}
 		if argument == 0 {
-			result.Stderr = []byte(name + ": 0: loop count out of range\n")
-			result.ExitCode = 2
-			return result, nil
+			stderr = []byte(name + ": 0: loop count out of range\n")
+			exitCode = 2
+			break
 		}
 		state.signal = signalBreak
 		if name == "continue" {
 			state.signal = signalContinue
 		}
 		state.signalDepth = min(argument, state.loopDepth)
-		result.ExitCode = 0
+		exitCode = 0
 	case "return":
 		if state.funcDepth == 0 && state.sourceDepth == 0 {
-			result.Stderr = []byte("return: can only be used in a function\n")
-			result.ExitCode = 1
-			return result, nil
+			stderr = []byte("return: can only be used in a function\n")
+			exitCode = 1
+			break
 		}
 		state.signal = signalReturn
 	case "exit":
 		state.signal = signalExit
 	}
-	return command.ResultUnknown(result, false, false, preserveUnknown), nil
+	return command.Result(command.Output().
+		Stderr(Resolved(stderr)).
+		ExitCode(newUncertain(exitCode, preserveUnknown)).
+		Build()), nil
 }

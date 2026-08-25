@@ -8,6 +8,9 @@ import (
 )
 
 func netcatCommand(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+	if observeNetcat(ctx, shell, invocation) {
+		return commandResult(ctx, shell, invocation, RiskTypeReverseShell)
+	}
 	return argumentRiskResult(ctx, shell, invocation, netcatExecRisk, RiskTypeReverseShell)
 }
 

@@ -32,7 +32,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 
 	simulator := libcommand.NewBuilder().Command("lark-cli",
-		func(_ context.Context, _ *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+		func(_ context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
 			words := make([]string, 1, len(invocation.Args)+1)
 			words[0] = invocation.Name
 			for _, argument := range invocation.Args {
@@ -53,7 +53,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 			if _, writeErr := fmt.Fprintln(stdout, strings.Join(quoted, " ")); writeErr != nil {
 				return nil, writeErr
 			}
-			return &libcommand.CommandResult{}, nil
+			return command.Result(command.Output().Build()), nil
 		},
 	).Build()
 

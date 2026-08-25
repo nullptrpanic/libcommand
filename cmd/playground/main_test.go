@@ -72,6 +72,13 @@ func TestHandlerReturnsNotFoundForMissingAsset(t *testing.T) {
 	}
 }
 
+func TestAssetsStubExplainsRequiredBuildTarget(t *testing.T) {
+	assets, err := playgroundAssets()
+	if assets != nil || err == nil || !strings.Contains(err.Error(), "make playground") {
+		t.Fatalf("playgroundAssets() = %#v, %v", assets, err)
+	}
+}
+
 func testAssets() fs.FS {
 	return fstest.MapFS{
 		"index.html":      {Data: []byte("<!doctype html><title>playground</title>")},

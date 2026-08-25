@@ -17,7 +17,7 @@ func executeIonice(_ context.Context, shell *runtime.CommandContext, invocation 
 	for index < len(invocation.Args) {
 		value, ok := wrapperArgument(invocation, index)
 		if !ok {
-			return unresolvedWrapper()
+			return unresolvedWrapper(shell)
 		}
 		if value == "--" {
 			index++
@@ -29,14 +29,14 @@ func executeIonice(_ context.Context, shell *runtime.CommandContext, invocation 
 		if value == "-p" || value == "--pid" || value == "-P" || value == "--pgid" || value == "-u" || value == "--uid" {
 			identifierMode = true
 			if _, ok := wrapperArgument(invocation, index+1); !ok {
-				return unresolvedWrapper()
+				return unresolvedWrapper(shell)
 			}
 			index += 2
 			continue
 		}
 		if value == "-c" || value == "--class" || value == "-n" || value == "--classdata" {
 			if _, ok := wrapperArgument(invocation, index+1); !ok {
-				return unresolvedWrapper()
+				return unresolvedWrapper(shell)
 			}
 			index += 2
 			continue
@@ -49,7 +49,7 @@ func executeIonice(_ context.Context, shell *runtime.CommandContext, invocation 
 			index++
 			continue
 		}
-		return unresolvedWrapper()
+		return unresolvedWrapper(shell)
 	}
 	if identifierMode {
 		return shell.StopUnresolved("ionice identifier mode does not execute a nested command"), nil

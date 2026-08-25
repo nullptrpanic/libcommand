@@ -18,9 +18,9 @@ func TestUserCommandEvaluatesShell(t *testing.T) {
 		Command("evaluate", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			return command.Evaluate(`if unknown-command; then record inner-yes; else record inner-no; fi`, "custom", 1), nil
 		}).
-		Command("record", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			calls[argumentString(t, invocation.Args[0])]++
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `evaluate; record outer`}); err != nil {
@@ -36,7 +36,7 @@ func TestOrdinaryUserCommandDoesNotExposeParserSpecialSyntax(t *testing.T) {
 	simulator := NewBuilder().Command("record",
 		func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			commandSyntax = command.CommandSyntax()
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: "record"}); err != nil {
 		t.Fatal(err)
@@ -91,7 +91,7 @@ func TestNestedShellParentsCountTowardMemoryLimit(t *testing.T) {
 			return nil, err
 		}
 		if depth == 0 {
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}
 		return command.RunShell(&ShellProgram{
 			Source: fmt.Sprintf("recurse %d", depth-1),
@@ -117,12 +117,12 @@ func TestCommandContextInputDoesNotExposeStateBuffer(t *testing.T) {
 		Command("mutate-copy", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			input, _ := command.Input()
 			input[0] = 'X'
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Command("observe-input", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			input, _ := command.Input()
 			observed = string(input)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: "mutate-copy; observe-input", Stdin: []byte("abc")}); err != nil {
@@ -140,12 +140,12 @@ func TestCommandContextSetInputCopiesCallerBuffer(t *testing.T) {
 			input := []byte("abc")
 			command.SetInput(input, false)
 			input[0] = 'X'
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Command("observe-input", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			input, _ := command.Input()
 			observed = string(input)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: "set-input; observe-input"}); err != nil {
@@ -167,11 +167,11 @@ func TestCommandContextVariableAssignmentRollsBackOnBudgetFailure(t *testing.T) 
 				Kind: expand.String,
 				Str:  strings.Repeat("x", 480),
 			}, false)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Command("observe", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			_, exists, _ = command.State().Variable("VALUE")
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: "mutate; observe"}); err != nil {
@@ -199,13 +199,13 @@ func TestUserHandlerCanChangeCurrentState(t *testing.T) {
 			if err := command.State().SetVariable("CUSTOM", "value"); err != nil {
 				return nil, err
 			}
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Command("observe", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			observedDirectory = invocation.Dir
 			observedEnvironment = invocation.Env
 			observedValue, _, observedResolved = command.State().Variable("CUSTOM")
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `change-state /workspace; observe`}); err != nil {
@@ -236,11 +236,11 @@ func TestUserHandlerCanSetAndUnsetVariables(t *testing.T) {
 					return nil, err
 				}
 			}
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
-		Command("observe", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("observe", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			observed = append(observed, argumentString(t, invocation.Args[0]))
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `mutate set; observe "$CUSTOM"; mutate unset; observe "${CUSTOM-unset}"`}); err != nil {
@@ -308,11 +308,11 @@ func TestStateRejectsInvalidMutationsWithoutPartialCommit(t *testing.T) {
 			simulator := builder.
 				Command("mutate", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 					mutationError = test.mutate(command.State())
-					return &CommandResult{}, nil
+					return commandResultForTest(command, nil, nil, 0), nil
 				}).
 				Command("observe", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 					observed = test.observe(command.State())
-					return &CommandResult{}, nil
+					return commandResultForTest(command, nil, nil, 0), nil
 				}).
 				Build()
 			if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: test.source}); err != nil {
@@ -335,11 +335,11 @@ func TestUserHandlerStateIsIsolatedAcrossBranches(t *testing.T) {
 			if err := command.State().ChangeDirectory("/changed"); err != nil {
 				return nil, err
 			}
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Command("observe", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			directories[command.State().Directory()]++
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `if unknown-command; then mutate; fi; observe`}); err != nil {
@@ -359,11 +359,11 @@ func TestBuiltinCDUsesUserOverride(t *testing.T) {
 			if err := command.State().ChangeDirectory("/custom"); err != nil {
 				return nil, err
 			}
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Command("observe", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			observedDirectory = command.State().Directory()
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `cd /ignored; builtin cd /; observe`}); err != nil {
@@ -378,13 +378,13 @@ func TestBuiltinEchoUsesUserOverride(t *testing.T) {
 	userCalls := 0
 	var observed []string
 	simulator := NewBuilder().
-		Command("echo", func(_ context.Context, _ *CommandContext, _ *Invocation) (*CommandResult, error) {
+		Command("echo", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			userCalls++
-			return &CommandResult{Stdout: []byte("user\n")}, nil
+			return commandResultForTest(command, []byte("user\n"), nil, 0), nil
 		}).
-		Command("observe", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("observe", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			observed = argumentStrings(t, invocation)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `direct=$(echo ignored); original=$(builtin echo original); observe "$direct" "$original"`}); err != nil {
@@ -398,13 +398,13 @@ func TestBuiltinEchoUsesUserOverride(t *testing.T) {
 func TestWildcardHandlerRunsOnlyAfterExactCommandMiss(t *testing.T) {
 	var calls []string
 	simulator := NewBuilder().
-		Command("*", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("*", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			calls = append(calls, "wildcard:"+invocation.Name)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
-		Command("exact", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("exact", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			calls = append(calls, "exact:"+invocation.Name)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `exact; set -- value; missing`}); err != nil {
@@ -423,13 +423,13 @@ func TestUserWildcardMakesUnknownCommandsObservableCandidates(t *testing.T) {
 	simulator := NewBuilder().Command("*", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		names = append(names, invocation.Name)
 		if invocation.Name == "producer" {
-			return command.UnresolvedResult(), nil
+			return unresolvedCommandResultForTest(command), nil
 		}
 		consumerArgumentCount = len(invocation.Args)
 		if consumerArgumentCount != 0 {
 			consumerArgumentKind = invocation.Args[0].Kind
 		}
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	}).Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `for value in "$(producer)"; do consumer "$value"; done`}); err != nil {
 		t.Fatal(err)
@@ -447,9 +447,9 @@ func TestUserHandlersOverrideCallLikeShellCommands(t *testing.T) {
 	builder := NewBuilder()
 	for _, name := range []string{"builtin", "command", "exec", "eval", "source", ".", "test", "["} {
 		commandName := name
-		builder.Command(name, func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		builder.Command(name, func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			calls = append(calls, commandName+":"+strings.Join(argumentStrings(t, invocation), ","))
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		})
 	}
 	simulator := builder.Build()
@@ -479,14 +479,14 @@ func TestLanguageControlCommandsRemainEvaluatorOwned(t *testing.T) {
 	builder := NewBuilder()
 	for _, name := range []string{"break", "continue", "return", "exit"} {
 		commandName := name
-		builder.Command(name, func(_ context.Context, _ *CommandContext, _ *Invocation) (*CommandResult, error) {
+		builder.Command(name, func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			controlCalls = append(controlCalls, commandName)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		})
 	}
-	builder.Command("record", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	builder.Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		records = append(records, argumentStrings(t, invocation)...)
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	simulator := builder.Build()
 	source := `for value in one two; do
@@ -523,9 +523,9 @@ record unreachable`
 func TestBuiltinTargetOverrideReceivesUnresolvedArguments(t *testing.T) {
 	var arguments []*Argument
 	simulator := NewBuilder().
-		Command("echo", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		Command("echo", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			arguments = append(arguments, invocation.Args...)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `builtin echo "$RANDOM"`}); err != nil {
@@ -538,7 +538,7 @@ func TestBuiltinTargetOverrideReceivesUnresolvedArguments(t *testing.T) {
 
 func TestSimulatorPropagatesHandlerError(t *testing.T) {
 	sentinel := errors.New("handler failed")
-	simulator := mustBuildSimulator(t, "lark-cli", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 		return nil, sentinel
 	})
 	err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `lark-cli run`})
@@ -550,7 +550,7 @@ func TestSimulatorPropagatesHandlerError(t *testing.T) {
 func TestNilHandlerResultUsesUnresolvedFallback(t *testing.T) {
 	var calls []string
 	simulator := NewBuilder().
-		Command("probe", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+		Command("probe", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			return nil, nil
 		}).
 		Command("observe", recordFirstArgument(t, &calls)).
@@ -560,6 +560,38 @@ func TestNilHandlerResultUsesUnresolvedFallback(t *testing.T) {
 	}
 	if want := []string{"success", "failure"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestEmptyHandlerResultUsesUnresolvedFallback(t *testing.T) {
+	var calls []string
+	simulator := NewBuilder().
+		Command("probe", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+			return command.NewResult(), nil
+		}).
+		Command("observe", recordFirstArgument(t, &calls)).
+		Build()
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `if probe; then observe success; else observe failure; fi`}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"success", "failure"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
+func TestCommandOutputBranchesConsumeExecutionSteps(t *testing.T) {
+	simulator := NewBuilder().
+		Limits(&Limits{MaxExecutionSteps: 1}).
+		Command("choose", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+			result := command.NewResult()
+			result.AddOutput(command.ForkState(), command.Output().Build())
+			result.AddOutput(command.ForkState(), command.Output().Build())
+			return result, nil
+		}).
+		Build()
+	err := simulator.Simulate(context.Background(), &SimulationRequest{Source: "choose"})
+	if err == nil || !strings.Contains(err.Error(), "maximum execution step count 1 reached") {
+		t.Fatalf("Simulate() error = %v, want execution-step limit", err)
 	}
 }
 
@@ -577,8 +609,8 @@ func TestSimulatorDispatchLimitsCombinedHandlerOutput(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			simulator := NewBuilder().
 				Limits(&Limits{MaxExecutionSteps: 100, MaxMemoryBytes: maximum}).
-				Command("output", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
-					return &CommandResult{Stdout: []byte(test.stdout), Stderr: []byte(test.stderr)}, nil
+				Command("output", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+					return commandResultForTest(command, []byte(test.stdout), []byte(test.stderr), 0), nil
 				}).
 				Build()
 			err := simulator.Simulate(context.Background(), &SimulationRequest{Source: "output"})
@@ -597,7 +629,7 @@ func TestSimulatorDispatchLimitsCombinedHandlerOutput(t *testing.T) {
 
 func TestSimulatorAcceptsUnresolvedHandlerResult(t *testing.T) {
 	simulator := mustBuildSimulator(t, "unknown", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
-		return command.UnresolvedResult(), nil
+		return unresolvedCommandResultForTest(command), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `unknown`}); err != nil {
 		t.Fatal(err)
@@ -605,7 +637,7 @@ func TestSimulatorAcceptsUnresolvedHandlerResult(t *testing.T) {
 }
 
 func TestSimulatorConvertsHandlerPanicToError(t *testing.T) {
-	simulator := mustBuildSimulator(t, "lark-cli", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 		panic("handler panic")
 	})
 	err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `lark-cli`})
@@ -617,7 +649,7 @@ func TestSimulatorConvertsHandlerPanicToError(t *testing.T) {
 func TestSimulatorHonorsCancellationDuringParsing(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	simulator := mustBuildSimulator(t, "lark-cli", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 		t.Fatal("handler called after cancellation")
 		return nil, nil
 	})
@@ -629,9 +661,9 @@ func TestSimulatorHonorsCancellationDuringParsing(t *testing.T) {
 
 func TestSimulatorHonorsCancellationAfterHandler(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	simulator := mustBuildSimulator(t, "lark-cli", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 		cancel()
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	err := simulator.Simulate(ctx, &SimulationRequest{Source: `lark-cli`})
 	if !errors.Is(err, context.Canceled) {
@@ -646,11 +678,11 @@ func TestSimulatorIsolatesHandlerInvocation(t *testing.T) {
 		Args:   []string{"argument"},
 		Stdin:  []byte("input"),
 	}
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		invocation.Args[0].Value = "mutated"
 		invocation.Env["TOKEN"] = "mutated"
 		invocation.Stdin[0] = 'X'
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), request); err != nil {
 		t.Fatal(err)
@@ -661,23 +693,25 @@ func TestSimulatorIsolatesHandlerInvocation(t *testing.T) {
 }
 
 func TestSimulatorDoesNotMutateHandlerResult(t *testing.T) {
-	result := &CommandResult{Stdout: []byte("output"), Stderr: []byte("error")}
-	simulator := mustBuildSimulator(t, "lark-cli", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+	var result *CommandResult
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+		result = commandResultForTest(command, []byte("output"), []byte("error"), 0)
 		return result, nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `lark-cli output`}); err != nil {
 		t.Fatal(err)
 	}
-	if string(result.Stdout) != "output" || string(result.Stderr) != "error" {
+	outputs := result.Outputs()
+	if len(outputs) != 1 || string(outputs[0].Stdout.Value) != "output" || string(outputs[0].Stderr.Value) != "error" {
 		t.Fatal("Simulate mutated the handler-owned result")
 	}
 }
 
 func TestSimulatorPassesOwnedInvocationToHandler(t *testing.T) {
 	var handledInvocation *Invocation
-	simulator := mustBuildSimulator(t, "handled", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "handled", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		handledInvocation = invocation
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `handled arg`}); err != nil {
 		t.Fatal(err)
@@ -689,9 +723,9 @@ func TestSimulatorPassesOwnedInvocationToHandler(t *testing.T) {
 
 func TestSimulatorIgnoresHostDependencyInInactiveParameterOperands(t *testing.T) {
 	var calls [][]string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		calls = append(calls, argumentStrings(t, invocation))
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 
 	source := `value=known
@@ -709,14 +743,14 @@ value=1; (( ${value:-$RANDOM} )) || lark-cli arithmetic-wrong`
 
 func TestSimulatorPreservesBackgroundOutputInCommandSubstitution(t *testing.T) {
 	var consumed string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		switch argumentString(t, invocation.Args[0]) {
 		case "produce":
-			return &CommandResult{Stdout: []byte("background\n")}, nil
+			return commandResultForTest(command, []byte("background\n"), nil, 0), nil
 		case "consume":
 			consumed = argumentString(t, invocation.Args[1])
 		}
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 
 	source := `lark-cli consume "$(lark-cli produce & wait)"`
@@ -730,16 +764,16 @@ func TestSimulatorPreservesBackgroundOutputInCommandSubstitution(t *testing.T) {
 
 func TestSimulatorPreservesCommandSubstitutionStderr(t *testing.T) {
 	var consumed []string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		switch argumentString(t, invocation.Args[0]) {
 		case "foreground":
-			return &CommandResult{Stderr: []byte("foreground-error\n")}, nil
+			return commandResultForTest(command, nil, []byte("foreground-error\n"), 0), nil
 		case "background":
-			return &CommandResult{Stderr: []byte("background-error\n")}, nil
+			return commandResultForTest(command, nil, []byte("background-error\n"), 0), nil
 		case "consume":
 			consumed = argumentStrings(t, &Invocation{Args: invocation.Args[1:]})
 		}
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 
 	source := `foreground=$(lark-cli foreground) 2> foreground.err
@@ -812,29 +846,29 @@ func requireArguments(t testing.TB, source string, want []string, recorder func(
 }
 
 func recordFirstArgument(t testing.TB, calls *[]string) Command {
-	return func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	return func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		*calls = append(*calls, argumentString(t, invocation.Args[0]))
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	}
 }
 
 func recordJoinedArguments(t testing.TB, calls *[]string) Command {
-	return func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	return func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		*calls = append(*calls, strings.Join(argumentStrings(t, invocation), " "))
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	}
 }
 
 func countInvocations(callbacks *int) Command {
-	return func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+	return func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 		*callbacks++
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	}
 }
 
 func successfulHandler() Command {
-	return func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
-		return &CommandResult{}, nil
+	return func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
+		return commandResultForTest(command, nil, nil, 0), nil
 	}
 }
 

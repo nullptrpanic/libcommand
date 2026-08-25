@@ -2,11 +2,28 @@ package main
 
 import (
 	"bytes"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/nullptrpanic/libcommand"
+	"github.com/nullptrpanic/libcommand/internal/materialize"
 )
+
+type failingReader struct{}
+
+func (*failingReader) Read([]byte) (int, error) {
+	return 0, errors.New("read failure")
+}
+
+type failingWriter struct{}
+
+func (*failingWriter) Write([]byte) (int, error) {
+	return 0, errors.New("write failure")
+}
 
 func TestRunScript(t *testing.T) {
 	script := filepath.Join(t.TempDir(), "single.sh")
@@ -103,5 +120,56 @@ func TestScriptPathsStopsAtMaterializationLimit(t *testing.T) {
 	paths, err := scriptPathsWithinLimit(directory, 1)
 	if paths != nil || err == nil || !strings.Contains(err.Error(), "maximum materialized byte count 1 reached") {
 		t.Fatalf("paths = %#v, error = %v", paths, err)
+	}
+}
+
+func TestRunReportsUsageAndPathErrors(t *testing.T) {
+	tests := []*struct {
+		name     string
+		args     []string
+		wantCode int
+		wantText string
+	}{
+		{name: "invalid flag", args: []string{"-unknown"}, wantCode: 2, wantText: "flag provided but not defined"},
+		{name: "missing script", wantCode: 2, wantText: "-script is required"},
+		{name: "missing path", args: []string{"-script", filepath.Join(t.TempDir(), "missing.sh")}, wantCode: 1, wantText: "inspect script path"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var stderr bytes.Buffer
+			if code := run(test.args, io.Discard, &stderr); code != test.wantCode || !strings.Contains(stderr.String(), test.wantText) {
+				t.Fatalf("run() = %d, stderr = %q", code, stderr.String())
+			}
+		})
+	}
+}
+
+func TestRunReportsHandlerOutputFailure(t *testing.T) {
+	script := filepath.Join(t.TempDir(), "script.sh")
+	if err := os.WriteFile(script, []byte("lark-cli value"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stderr bytes.Buffer
+	if code := run([]string{"-script", script}, &failingWriter{}, &stderr); code != 1 || !strings.Contains(stderr.String(), "write failure") {
+		t.Fatalf("run() = %d, stderr = %q", code, stderr.String())
+	}
+}
+
+func TestScriptAndReaderErrorPaths(t *testing.T) {
+	if source, err := readScript(&failingReader{}, 16); source != "" || err == nil || err.Error() != "read failure" {
+		t.Fatalf("readScript() = %q, %v", source, err)
+	}
+	if err := simulateFile(libcommand.NewBuilder().Build(), filepath.Join(t.TempDir(), "missing.sh")); err == nil || !strings.Contains(err.Error(), "read script") {
+		t.Fatalf("simulateFile() = %v", err)
+	}
+
+	directory := t.TempDir()
+	name := "script.sh"
+	if err := os.WriteFile(filepath.Join(directory, name), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	maximum := materialize.EntryBytes + len(name)
+	if paths, err := scriptPathsWithinLimit(directory, maximum); paths != nil || err == nil || !strings.Contains(err.Error(), "maximum materialized byte count") {
+		t.Fatalf("scriptPathsWithinLimit() = %#v, %v", paths, err)
 	}
 }

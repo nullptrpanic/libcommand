@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/nullptrpanic/libcommand/internal/materialize"
 	"mvdan.cc/sh/v3/syntax"
@@ -30,13 +31,22 @@ func (e *ExecutionContext) invokeCommand(state *State, source *location, command
 		}()
 		result, err = command(e.ctx, commandContext, invocation)
 	}()
-	if err == nil {
-		err = validateCommandResultMaterialization(result, e.config.MaxMemoryBytes)
+	applyResult := err == nil
+	if applyResult && result != nil && result.operation == nil && len(result.outputs) > 1 {
+		if status := e.reserveExecutionSteps(state, len(result.outputs)-1, source); status != StatusCompleted {
+			paths = []*pathResult{{state: state, status: status}}
+			applyResult = false
+		}
 	}
-	if err == nil {
+	if applyResult {
+		err = validateCommandResultMaterialization(result, e.config.MaxMemoryBytes)
+		applyResult = err == nil
+	}
+	if applyResult {
 		paths, err = commandContext.applyResult(result)
 	}
 	commandContext.restoreUser(paths)
+	releaseCommandResultStates(result)
 	e.trace.commandFinished(e, state, commandSyntax, result, err)
 	if err != nil {
 		if expansionRequested(err) {
@@ -48,41 +58,56 @@ func (e *ExecutionContext) invokeCommand(state *State, source *location, command
 	return paths, nil
 }
 
-func (c *CommandContext) applyResult(result *CommandResult) ([]*pathResult, error) {
-	if result != nil && result.operation != nil {
-		return c.executeOperation(result.operation)
+func releaseCommandResultStates(result *CommandResult) {
+	if result == nil {
+		return
 	}
-	return c.applyOrdinaryResult(result)
+	for _, output := range result.outputs {
+		output.state = nil
+	}
 }
 
-func (c *CommandContext) applyOrdinaryResult(result *CommandResult) ([]*pathResult, error) {
-	if result == nil {
-		result = NewUnresolvedResult()
-	}
-	stdoutUnknown := result.stdoutUnknown
-	stderrUnknown := result.stderrUnknown
-	exitUnknown := result.exitUnknown
-	preserveExit := result.preserveExit
-	if !preserveExit {
-		if exitUnknown {
-			c.state.setUnknownExitCode()
-		} else {
-			c.state.setExitCode(result.ExitCode)
+func (c *CommandContext) applyResult(result *CommandResult) ([]*pathResult, error) {
+	if result == nil || result.operation == nil && len(result.outputs) == 0 {
+		action := CommandContinue
+		if result != nil {
+			action = result.Action
 		}
+		result = c.Result(c.Output().
+			Stdout(Unresolved[[]byte](nil)).
+			Stderr(Unresolved[[]byte](nil)).
+			ExitCode(Unresolved(0)).
+			Build())
+		result.Action = action
 	}
+	if result.operation != nil {
+		return c.executeOperation(result.operation)
+	}
+	return c.applyOutputs(result), nil
+}
+
+func (c *CommandContext) applyOutputs(result *CommandResult) []*pathResult {
 	status := StatusCompleted
 	if result.Action == CommandStop {
 		c.execution.stop = true
 		status = StatusTerminated
 	}
-	status = c.execution.appendOutcome(c.state, &outcome{
-		stdout:        result.Stdout,
-		stderr:        result.Stderr,
-		stdoutUnknown: stdoutUnknown,
-		stderrUnknown: stderrUnknown,
-		status:        status,
-	}, c.source)
-	return []*pathResult{{state: c.state, status: status}}, nil
+	paths := make([]*pathResult, 0, len(result.outputs))
+	for _, output := range result.outputs {
+		state := output.state
+		output.state = nil
+		stdout, stderr, exitCode, stdoutUnresolved, stderrUnresolved, exitUnresolved := output.values()
+		state.setExitStatus(exitCode, exitUnresolved)
+		pathStatus := c.execution.appendOutcome(state, &outcome{
+			stdout:        stdout,
+			stderr:        stderr,
+			stdoutUnknown: stdoutUnresolved,
+			stderrUnknown: stderrUnresolved,
+			status:        status,
+		}, c.source)
+		paths = append(paths, &pathResult{state: state, status: pathStatus})
+	}
+	return paths
 }
 
 func (c *CommandContext) executeOperation(operation *commandOperation) ([]*pathResult, error) {
@@ -115,9 +140,44 @@ func validateCommandResultMaterialization(result *CommandResult, maximum int) er
 		return nil
 	}
 	maximum = normalizedMaxMemoryBytes(maximum)
-	total, ok := materialize.Add(0, len(result.Stdout), maximum)
+	total := 0
+	stateBytes := 0
+	baseline := 0
+	baselineSet := false
+	ok := true
+	for _, output := range result.outputs {
+		total, ok = materialize.Add(total, materialize.EntryBytes, maximum)
+		if !ok {
+			break
+		}
+		stdout, _ := output.Stdout.Data()
+		stderr, _ := output.Stderr.Data()
+		total, ok = materialize.Add(total, len(stdout), maximum)
+		if ok {
+			total, ok = materialize.Add(total, len(stderr), maximum)
+		}
+		if ok {
+			var bytes int
+			bytes, ok = stateMaterialization(output.state)
+			if ok {
+				stateBytes, ok = materialize.Add(stateBytes, bytes, math.MaxInt)
+			}
+			if !baselineSet && output.state != nil {
+				baseline = output.state.initialBytes
+				baselineSet = true
+			}
+		}
+		if !ok {
+			break
+		}
+	}
+	if stateBytes > baseline {
+		stateBytes -= baseline
+	} else {
+		stateBytes = 0
+	}
 	if ok {
-		_, ok = materialize.Add(total, len(result.Stderr), maximum)
+		_, ok = materialize.Add(total, stateBytes, maximum)
 	}
 	if !ok {
 		return materialize.LimitError(maximum)

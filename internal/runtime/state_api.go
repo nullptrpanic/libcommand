@@ -62,13 +62,34 @@ func (s *State) ChangeDirectory(name string) error {
 		if err := assignShellVariable(s, "PWD", directoryVariable(resolved), resolvedUnresolved); err != nil {
 			return err
 		}
-		if resolvedUnresolved {
-			s.dir = newUnresolved(resolved)
-		} else {
-			s.dir = newCertain(resolved)
-		}
+		s.setDirectory(resolved, resolvedUnresolved)
 		return nil
 	})
+}
+
+// SetDirectory replaces the representative working directory without
+// updating PWD or OLDPWD. Stateful commands use it when those variable writes
+// must retain their own Shell error behavior.
+func (s *State) SetDirectory(directory string, unresolved bool) error {
+	if s.frozen {
+		return errFrozenState
+	}
+	previous := s.dir
+	s.setDirectory(directory, unresolved)
+	if err := s.checkPublicMutationMaterialization(); err != nil {
+		s.dir = previous
+		return err
+	}
+	return nil
+}
+
+// EnsureDirectory creates a directory and any missing parents in this state's
+// virtual filesystem.
+func (s *State) EnsureDirectory(name string) error {
+	if s.frozen {
+		return errFrozenState
+	}
+	return s.fs.ensureDir(name)
 }
 
 // Variable returns one shell variable as a string. exists reports whether the
@@ -96,6 +117,18 @@ func (s *State) SetVariable(name, value string) error {
 	})
 }
 
+// AssignVariable assigns a Shell variable while preserving its full value and
+// certainty metadata.
+func (s *State) AssignVariable(name string, value *expand.Variable, unresolved bool) error {
+	maximum := s.maximumMemoryBytes()
+	if variableEntryBytes(name, value) > maximum {
+		return materialize.LimitError(maximum)
+	}
+	return s.mutate(func() error {
+		return s.assignVariable(name, value, unresolved)
+	})
+}
+
 // UnsetVariable removes one shell variable atomically.
 func (s *State) UnsetVariable(name string) error {
 	return s.mutate(func() error {
@@ -109,6 +142,14 @@ func stringVariable(value string) expand.Variable {
 
 func directoryVariable(value string) expand.Variable {
 	return expand.Variable{Set: true, Exported: true, Kind: expand.String, Str: value}
+}
+
+func (s *State) setDirectory(directory string, unresolved bool) {
+	s.dir = newUncertain(directory, unresolved)
+}
+
+func (s *State) assignVariable(name string, value *expand.Variable, unresolved bool) error {
+	return assignShellVariable(s, name, *value, unresolved)
 }
 
 func (s *State) maximumMemoryBytes() int {

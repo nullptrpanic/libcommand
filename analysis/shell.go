@@ -13,6 +13,7 @@ import (
 func Shell(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
 	arguments, concrete := concreteArguments(invocation.Args)
 	interactive := concrete && interactiveShellReadsInput(arguments)
+	observeInteractiveShell(ctx, shell, invocation, interactive)
 	risky := interactive && networkFeedsStdin(shell.Redirects())
 	riskType := RiskType("")
 	if risky {

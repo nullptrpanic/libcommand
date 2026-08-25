@@ -103,7 +103,6 @@ func (e *ExecutionContext) evaluateExitTraps(paths []*pathResult) ([]*pathResult
 			continue
 		}
 		originalExitStatus := path.state.exitStatus
-		originalExitFailure := path.state.exitFailure
 		path.state.deleteTrap("EXIT")
 		path.state.signal = signalNone
 		trapped, err := e.evaluateSourceText(path.state, command, "EXIT trap")
@@ -112,7 +111,6 @@ func (e *ExecutionContext) evaluateExitTraps(paths []*pathResult) ([]*pathResult
 				continue
 			}
 			current.state.exitStatus = originalExitStatus
-			current.state.exitFailure = originalExitFailure
 		}
 		results = append(results, trapped...)
 		if err != nil {

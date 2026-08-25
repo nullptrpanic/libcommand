@@ -60,12 +60,12 @@ func runBash(t *testing.T, script string, request *Request, configure func(*Conf
 	t.Helper()
 	file := parseForTest(t, script, "script.sh")
 	var calls []*dispatchedCommand
-	config := Config{MaxExecutionSteps: 100, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, command *Invocation) (*CommandResult, error) {
+	config := Config{MaxExecutionSteps: 100, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, command *Invocation) (*CommandResult, error) {
 		args := argumentStrings(t, command)
 		calls = append(calls, &dispatchedCommand{
 			name: command.Name, args: args, stdin: string(command.Stdin), dir: command.Dir, env: maps.Clone(command.Env),
 		})
-		return &CommandResult{Stdout: []byte(command.Name + ":" + strings.Join(args, ",") + "\n")}, nil
+		return resultForTest(state, []byte(command.Name+":"+strings.Join(args, ",")+"\n"), nil, 0), nil
 	})}
 	if configure != nil {
 		configure(&config, &calls)
@@ -190,8 +190,8 @@ func TestExecuteDispatchAndTerminalErrors(t *testing.T) {
 	}{
 		{"handled dispatch completes", "unknown arg", nil, StatusCompleted, false},
 		{"stop dispatch", "one; two", func(c *Config, _ *[]*dispatchedCommand) {
-			c.LookupCommand = lookupAllCommands(func(context.Context, *State, *Invocation) (*CommandResult, error) {
-				return &CommandResult{Action: CommandStop}, nil
+			c.LookupCommand = lookupAllCommands(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
+				return stoppedResultForTest(state, nil, nil, 0), nil
 			})
 		}, StatusTerminated, false},
 		{"handler error", "broken", func(c *Config, _ *[]*dispatchedCommand) {
@@ -382,12 +382,12 @@ func TestCommandSubstitutionAndInternalErrors(t *testing.T) {
 	}
 	s := newState(&Request{}, defaultMaxMemoryBytes)
 	dispatches := 0
-	e := &ExecutionContext{ctx: context.Background(), config: Config{MaxExecutionSteps: 10, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, command *Invocation) (*CommandResult, error) {
+	e := &ExecutionContext{ctx: context.Background(), config: Config{MaxExecutionSteps: 10, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, command *Invocation) (*CommandResult, error) {
 		dispatches++
-		return &CommandResult{Stdout: []byte(strings.Join(argumentStrings(t, command), " "))}, nil
+		return resultForTest(state, []byte(strings.Join(argumentStrings(t, command), " ")), nil, 0), nil
 	})}}
 	paths, err := e.evaluateStatement(s, file.Stmts[0])
-	if err != nil || len(paths) != 1 || string(paths[0].state.stdout.data) != "value\n" || dispatches != 1 {
+	if err != nil || len(paths) != 1 || string(paths[0].state.stdout.Value) != "value\n" || dispatches != 1 {
 		t.Fatalf("paths=%#v err=%v dispatches=%d", paths, err, dispatches)
 	}
 
@@ -399,8 +399,8 @@ func TestCommandSubstitutionAndInternalErrors(t *testing.T) {
 
 	inputOnly := parseForTest(t, `echo "$(<input)"`, "input.sh")
 	s.fs.write("/input", []byte("contents\n"), false)
-	result, failures, ok, err := e.inputOnlySubstitution(s, firstCommandSubstitution(inputOnly.Stmts[0].Cmd))
-	if err != nil || result.stdout.unresolved || result.exitStatus.unresolved || failures != nil || !ok || string(result.stdout.data) != "contents\n" {
+	result, ok, err := e.inputOnlySubstitution(s, firstCommandSubstitution(inputOnly.Stmts[0].Cmd))
+	if err != nil || result.stdout.Unresolved || result.exitStatus.Unresolved || !ok || string(result.stdout.Value) != "contents\n" {
 		t.Fatalf("input substitution = %#v err=%v ok=%t", result, err, ok)
 	}
 

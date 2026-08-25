@@ -76,9 +76,9 @@ func FuzzSimulatorRequestIsolation(f *testing.F) {
 	f.Fuzz(func(t *testing.T, token, argument string, stdin []byte) {
 		var calls []*fuzzInvocation
 		simulator := mustBuildSimulator(t, "record", Command(
-			func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+			func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 				calls = append(calls, snapshotFuzzInvocation(t, invocation))
-				return &CommandResult{}, nil
+				return commandResultForTest(command, nil, nil, 0), nil
 			},
 		))
 		const source = `record request "$TOKEN" "$1"`
@@ -118,9 +118,9 @@ func runFuzzSimulation(t testing.TB, request *SimulationRequest) ([]*fuzzInvocat
 	t.Helper()
 	var calls []*fuzzInvocation
 	simulator := mustBuildSimulator(t, "record", Command(
-		func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			calls = append(calls, snapshotFuzzInvocation(t, invocation))
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		},
 	))
 	err := simulator.Simulate(context.Background(), request)

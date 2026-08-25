@@ -10,9 +10,9 @@ func init() {
 	register("*", executeFallback)
 }
 
-func executeFallback(ctx context.Context, _ *runtime.CommandContext, _ *runtime.Invocation) (*runtime.CommandResult, error) {
+func executeFallback(ctx context.Context, shell *runtime.CommandContext, _ *runtime.Invocation) (*runtime.CommandResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-	return runtime.NewUnresolvedResult(), nil
+	return unresolvedCommandResult(shell), nil
 }

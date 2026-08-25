@@ -14,25 +14,29 @@ func init() {
 }
 
 func executeSeqCommand(ctx context.Context, command *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
-	return executeSeq(ctx, invocation, command.MaxMemoryBytes())
+	output, err := executeSeq(ctx, invocation, command.MaxMemoryBytes())
+	if err != nil {
+		return nil, err
+	}
+	return command.Result(output), nil
 }
 
-func executeSeq(ctx context.Context, invocation *runtime.Invocation, maximum int) (*runtime.CommandResult, error) {
+func executeSeq(ctx context.Context, invocation *runtime.Invocation, maximum int) (*runtime.CommandOutput, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	if len(invocation.Args) < 1 || len(invocation.Args) > 3 {
-		return seqFailure("seq: expected 1 to 3 integer arguments\n"), nil
+		return commandOutput(nil, []byte("seq: expected 1 to 3 integer arguments\n"), 1), nil
 	}
 
 	values := make([]int64, len(invocation.Args))
 	for index, argument := range invocation.Args {
 		if argument.Kind != runtime.ArgumentString {
-			return runtime.NewUnresolvedResult(), nil
+			return unresolvedCommandOutput(), nil
 		}
 		value, err := strconv.ParseInt(argument.Value, 10, 64)
 		if err != nil {
-			return seqFailure(fmt.Sprintf("seq: invalid integer %q\n", argument.Value)), nil
+			return commandOutput(nil, []byte(fmt.Sprintf("seq: invalid integer %q\n", argument.Value)), 1), nil
 		}
 		values[index] = value
 	}
@@ -45,10 +49,10 @@ func executeSeq(ctx context.Context, invocation *runtime.Invocation, maximum int
 		first, step, last = values[0], values[1], values[2]
 	}
 	if step == 0 {
-		return seqFailure("seq: step must not be zero\n"), nil
+		return commandOutput(nil, []byte("seq: step must not be zero\n"), 1), nil
 	}
 	if step > 0 && first > last || step < 0 && first < last {
-		return &runtime.CommandResult{}, nil
+		return commandOutput(nil, nil, 0), nil
 	}
 
 	var stdout []byte
@@ -75,9 +79,5 @@ func executeSeq(ctx context.Context, invocation *runtime.Invocation, maximum int
 		}
 		current = next
 	}
-	return &runtime.CommandResult{Stdout: stdout}, nil
-}
-
-func seqFailure(message string) *runtime.CommandResult {
-	return &runtime.CommandResult{Stderr: []byte(message), ExitCode: 1}
+	return commandOutput(stdout, nil, 0), nil
 }

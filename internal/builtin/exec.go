@@ -36,10 +36,10 @@ options:
 		}
 	}
 	if len(args) == 0 {
-		return &runtime.CommandResult{}, nil
+		return commandResult(shell, nil, nil, 0), nil
 	}
 	if args[0].Kind != runtime.ArgumentString {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	if args[0].Value == "exec" {
 		return shell.StopUnresolved("nested exec command is not supported"), nil

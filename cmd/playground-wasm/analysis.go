@@ -46,14 +46,7 @@ func (a *playgroundAnalyzer) middleware(next libcommand.Command) libcommand.Comm
 
 func (a *playgroundAnalyzer) detect(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) {
 	handler := lookupPlaygroundAnalysisCommand(invocation.Name)
-	if handler == nil {
-		return
-	}
-	a.runDetector(ctx, shell, invocation, handler)
-}
-
-func (a *playgroundAnalyzer) runDetector(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation, handler libcommand.Command) {
-	_, err := handler(ctx, shell, invocation)
+	err := commandanalysis.Inspect(ctx, shell, invocation, handler)
 	detectionError := new(commandanalysis.DetectionError)
 	if !errors.As(err, &detectionError) {
 		return

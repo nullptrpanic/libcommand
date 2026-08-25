@@ -156,12 +156,12 @@ esac`
 		t.Run(test.name, func(t *testing.T) {
 			callbacks := 0
 			paths, _, err := runBash(t, test.script, &Request{}, func(config *Config, _ *[]*dispatchedCommand) {
-				config.LookupCommand = lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+				config.LookupCommand = lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 					if invocation.Name == "probe" {
 						callbacks++
-						return &CommandResult{Stdout: []byte("1\n")}, nil
+						return resultForTest(state, []byte("1\n"), nil, 0), nil
 					}
-					return &CommandResult{}, nil
+					return resultForTest(state, nil, nil, 0), nil
 				})
 			})
 			if err != nil {
@@ -184,7 +184,7 @@ esac`
 		t.Run(test.name, func(t *testing.T) {
 			sentinel := errors.New(test.name)
 			paths, _, err := runBash(t, test.script, &Request{}, func(config *Config, _ *[]*dispatchedCommand) {
-				config.LookupCommand = lookupAllCommands(func(context.Context, *State, *Invocation) (*CommandResult, error) {
+				config.LookupCommand = lookupAllCommands(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 					return nil, sentinel
 				})
 			})
@@ -341,7 +341,7 @@ func TestDirectExecutionCancellationStopAndMalformedAssignments(t *testing.T) {
 		}
 	}
 	paths, err = e.evaluateStatement(s, &syntax.Stmt{})
-	if err != nil || paths[0].status != StatusCompleted || len(paths[0].state.stdout.data) != 0 || len(paths[0].state.stderr.data) != 0 {
+	if err != nil || paths[0].status != StatusCompleted || len(paths[0].state.stdout.Value) != 0 || len(paths[0].state.stderr.Value) != 0 {
 		t.Fatalf("empty statement=%#v err=%v", paths, err)
 	}
 
@@ -425,7 +425,7 @@ func TestIfAndLogicalTerminalAndErrorPropagation(t *testing.T) {
 	})
 
 	t.Run("if stop and abstract redirect condition", func(t *testing.T) {
-		e, s := newExecutorForTest(context.Background(), 20, &Request{}, func(context.Context, *State, *Invocation) (*CommandResult, error) {
+		e, s := newExecutorForTest(context.Background(), 20, &Request{}, func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 			t.Fatal("dispatch while ExecutionContext stopped")
 			return nil, nil
 		})
@@ -461,8 +461,8 @@ func TestIfAndLogicalTerminalAndErrorPropagation(t *testing.T) {
 			t.Fatalf("canceled paths=%#v err=%v", paths, err)
 		}
 
-		e, s = newExecutorForTest(context.Background(), 20, &Request{}, func(context.Context, *State, *Invocation) (*CommandResult, error) {
-			return &CommandResult{Action: CommandStop}, nil
+		e, s = newExecutorForTest(context.Background(), 20, &Request{}, func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
+			return stoppedResultForTest(state, nil, nil, 0), nil
 		})
 		paths, err = e.evaluateLogical(s, command)
 		if err != nil || len(paths) != 1 || paths[0].status != StatusTerminated || !e.stop {
@@ -491,7 +491,7 @@ func TestSubstitutionStatusAndRedirectionErrors(t *testing.T) {
 		s.fs.write("/input", []byte("contents\n"), false)
 		input := parseForTest(t, `echo "$(< /input)"`, "substitution.sh")
 		paths, err := e.evaluateStatement(s, input.Stmts[0])
-		if err != nil || len(paths) != 1 || string(paths[0].state.stdout.data) != "contents\n" {
+		if err != nil || len(paths) != 1 || string(paths[0].state.stdout.Value) != "contents\n" {
 			t.Fatalf("input paths=%#v err=%v", paths, err)
 		}
 
@@ -519,8 +519,8 @@ func TestSubstitutionStatusAndRedirectionErrors(t *testing.T) {
 			{Stmts: []*syntax.Stmt{{Cmd: &syntax.IfClause{}, Redirs: []*syntax.Redirect{{Op: syntax.RdrIn, Word: coverageWord("input")}}}}},
 			{Stmts: []*syntax.Stmt{{Cmd: &syntax.CallExpr{Assigns: []*syntax.Assign{{Name: &syntax.Lit{Value: "X"}, Value: coverageWord("value")}}}, Redirs: []*syntax.Redirect{{Op: syntax.RdrIn, Word: coverageWord("input")}}}}},
 		} {
-			result, failures, ok, err := e.inputOnlySubstitution(s, substitution)
-			if err != nil || ok || result != nil || failures != nil {
+			result, ok, err := e.inputOnlySubstitution(s, substitution)
+			if err != nil || ok || result != nil {
 				t.Fatalf("substitution=%#v result=%#v ok=%t err=%v", substitution, result, ok, err)
 			}
 		}

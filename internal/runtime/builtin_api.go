@@ -73,12 +73,8 @@ func (c *CommandContext) Directory() (string, bool) {
 	return c.state.dir.Data()
 }
 
-func (c *CommandContext) SetDirectory(directory string, unresolved bool) {
-	if unresolved {
-		c.state.dir = newUnresolved(directory)
-		return
-	}
-	c.state.dir = newCertain(directory)
+func (c *CommandContext) SetDirectory(directory string, unresolved bool) error {
+	return c.state.SetDirectory(directory, unresolved)
 }
 
 func (c *CommandContext) ResolvePath(name string) string {
@@ -91,7 +87,7 @@ func (c *CommandContext) PathKind(name string) PathKind {
 }
 
 func (c *CommandContext) EnsureDirectory(name string) error {
-	return c.state.fs.ensureDir(name)
+	return c.state.EnsureDirectory(name)
 }
 
 // RemovePath removes one resolved path from the virtual filesystem. Recursive
@@ -193,10 +189,6 @@ func (c *CommandContext) FunctionDepth() int {
 	return c.state.funcDepth
 }
 
-func (c *CommandContext) SnapshotForUnknownFailure() *State {
-	return c.state.snapshotForUnknownFailure()
-}
-
 func (c *CommandContext) Snapshot() *State {
 	return c.state.clone()
 }
@@ -211,10 +203,6 @@ func (c *CommandContext) Restore(snapshot *State) {
 	c.state.retainedParentBytes = retainedParentBytes
 	c.state.frozen = false
 	c.state.frozenBytes = 0
-}
-
-func (c *CommandContext) SetUnknownExitWithFailure(snapshot *State) {
-	c.state.setUnknownExitCodeWithFailure(snapshot)
 }
 
 func (c *CommandContext) EachVariable(yield func(string, *expand.Variable) bool) {
@@ -320,7 +308,7 @@ func (c *CommandContext) AssignVariable(name string, value *expand.Variable, unk
 		return err
 	}
 	return c.mutateVariables(func() error {
-		return assignShellVariable(c.state, name, *value, unknown)
+		return c.state.assignVariable(name, value, unknown)
 	})
 }
 

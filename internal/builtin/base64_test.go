@@ -24,7 +24,7 @@ func TestBase64EncodesStdin(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.ExitCode != 0 || string(result.Stdout) != test.stdout || len(result.Stderr) != 0 {
+			if result.ExitCode.Value != 0 || string(result.Stdout.Value) != test.stdout || len(result.Stderr.Value) != 0 {
 				t.Fatalf("result = %#v, want stdout %q", result, test.stdout)
 			}
 		})
@@ -38,7 +38,7 @@ func TestBase64DecodesStdin(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.ExitCode != 0 || string(result.Stdout) != "hello" || len(result.Stderr) != 0 {
+			if result.ExitCode.Value != 0 || string(result.Stdout.Value) != "hello" || len(result.Stderr.Value) != 0 {
 				t.Fatalf("result = %#v, want decoded output", result)
 			}
 		})
@@ -62,7 +62,7 @@ func TestBase64RejectsInvalidInputAndArguments(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.ExitCode != 1 || len(result.Stdout) != 0 || string(result.Stderr) != test.stderr {
+			if result.ExitCode.Value != 1 || len(result.Stdout.Value) != 0 || string(result.Stderr.Value) != test.stderr {
 				t.Fatalf("result = %#v, want stderr %q", result, test.stderr)
 			}
 		})
@@ -83,7 +83,7 @@ func TestBase64ReportsUnresolvedArgumentsExplicitly(t *testing.T) {
 		Name: "base64",
 		Args: []*runtime.Argument{{Kind: runtime.ArgumentUnresolved}},
 	}, 2<<20)
-	if err != nil || !result.AllUnresolved() {
+	if err != nil || !(result.Stdout.Unresolved && result.Stderr.Unresolved && result.ExitCode.Unresolved) {
 		t.Fatalf("result = %#v, error = %v", result, err)
 	}
 }
@@ -91,7 +91,7 @@ func TestBase64ReportsUnresolvedArgumentsExplicitly(t *testing.T) {
 func TestBase64HonorsMaterializationLimit(t *testing.T) {
 	encode := &runtime.Invocation{Name: "base64", Stdin: []byte("hello")}
 	result, err := executeBase64(context.Background(), encode, 9)
-	if err != nil || string(result.Stdout) != "aGVsbG8=\n" {
+	if err != nil || string(result.Stdout.Value) != "aGVsbG8=\n" {
 		t.Fatalf("exact encode result = %#v, error = %v", result, err)
 	}
 	result, err = executeBase64(context.Background(), encode, 8)
@@ -105,7 +105,7 @@ func TestBase64HonorsMaterializationLimit(t *testing.T) {
 		Stdin: []byte("aGVs\nbG8="),
 	}
 	result, err = executeBase64(context.Background(), decode, 5)
-	if err != nil || string(result.Stdout) != "hello" {
+	if err != nil || string(result.Stdout.Value) != "hello" {
 		t.Fatalf("exact decode result = %#v, error = %v", result, err)
 	}
 	result, err = executeBase64(context.Background(), decode, 4)
@@ -114,7 +114,7 @@ func TestBase64HonorsMaterializationLimit(t *testing.T) {
 	}
 }
 
-func runBase64(ctx context.Context, args []string, stdin []byte) (*runtime.CommandResult, error) {
+func runBase64(ctx context.Context, args []string, stdin []byte) (*runtime.CommandOutput, error) {
 	arguments := make([]*runtime.Argument, len(args))
 	for index, argument := range args {
 		arguments[index] = &runtime.Argument{Kind: runtime.ArgumentString, Value: argument}

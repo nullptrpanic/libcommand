@@ -15,10 +15,14 @@ func init() {
 }
 
 func executeBase64Command(ctx context.Context, command *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
-	return executeBase64(ctx, invocation, command.MaxMemoryBytes())
+	output, err := executeBase64(ctx, invocation, command.MaxMemoryBytes())
+	if err != nil {
+		return nil, err
+	}
+	return command.Result(output), nil
 }
 
-func executeBase64(ctx context.Context, invocation *runtime.Invocation, maximum int) (*runtime.CommandResult, error) {
+func executeBase64(ctx context.Context, invocation *runtime.Invocation, maximum int) (*runtime.CommandOutput, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -27,7 +31,7 @@ func executeBase64(ctx context.Context, invocation *runtime.Invocation, maximum 
 	options := true
 	for _, argument := range invocation.Args {
 		if argument.Kind != runtime.ArgumentString {
-			return runtime.NewUnresolvedResult(), nil
+			return unresolvedCommandOutput(), nil
 		}
 		if options {
 			switch argument.Value {
@@ -39,13 +43,13 @@ func executeBase64(ctx context.Context, invocation *runtime.Invocation, maximum 
 				continue
 			}
 			if strings.HasPrefix(argument.Value, "-") {
-				return base64Failure(fmt.Sprintf("base64: unsupported option %q\n", argument.Value)), nil
+				return commandOutput(nil, []byte(fmt.Sprintf("base64: unsupported option %q\n", argument.Value)), 1), nil
 			}
 		}
-		return base64Failure("base64: file operands are not supported\n"), nil
+		return commandOutput(nil, []byte("base64: file operands are not supported\n"), 1), nil
 	}
 	if invocation.Unresolved != nil && invocation.Unresolved.Stdin {
-		return runtime.NewUnresolvedResult(), nil
+		return unresolvedCommandOutput(), nil
 	}
 
 	if decode {
@@ -56,12 +60,12 @@ func executeBase64(ctx context.Context, invocation *runtime.Invocation, maximum 
 		stdout := make([]byte, decodedLength)
 		written, err := base64.StdEncoding.Decode(stdout, invocation.Stdin)
 		if err != nil {
-			return base64Failure("base64: invalid input\n"), nil
+			return commandOutput(nil, []byte("base64: invalid input\n"), 1), nil
 		}
-		return &runtime.CommandResult{Stdout: stdout[:written]}, nil
+		return commandOutput(stdout[:written], nil, 0), nil
 	}
 	if len(invocation.Stdin) == 0 {
-		return &runtime.CommandResult{}, nil
+		return commandOutput(nil, nil, 0), nil
 	}
 	encodedLength := base64.StdEncoding.EncodedLen(len(invocation.Stdin))
 	resultLength, ok := materialize.Add(encodedLength, 1, maximum)
@@ -71,7 +75,7 @@ func executeBase64(ctx context.Context, invocation *runtime.Invocation, maximum 
 	stdout := make([]byte, resultLength)
 	base64.StdEncoding.Encode(stdout[:encodedLength], invocation.Stdin)
 	stdout[encodedLength] = '\n'
-	return &runtime.CommandResult{Stdout: stdout}, nil
+	return commandOutput(stdout, nil, 0), nil
 }
 
 func base64DecodedLength(input []byte) int {
@@ -92,8 +96,4 @@ func base64DecodedLength(input []byte) int {
 		break
 	}
 	return base64.RawStdEncoding.DecodedLen(length)
-}
-
-func base64Failure(message string) *runtime.CommandResult {
-	return &runtime.CommandResult{Stderr: []byte(message), ExitCode: 1}
 }

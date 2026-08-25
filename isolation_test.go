@@ -17,11 +17,11 @@ func TestHostFileIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	simulator := mustBuildSimulator(t, "inspect", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "inspect", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		if len(invocation.Args) != 1 || argumentString(t, invocation.Args[0]) != "virtual" {
 			t.Fatalf("invocation = %#v", invocation)
 		}
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	source := `echo virtual > host.txt; inspect "$(<host.txt)"`
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {
@@ -40,11 +40,11 @@ func TestSimulatorConcurrentReuse(t *testing.T) {
 	const simulations = 32
 	seen := make(map[string]int, simulations)
 	var mutex sync.Mutex
-	simulator := mustBuildSimulator(t, "record", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		mutex.Lock()
 		seen[argumentString(t, invocation.Args[0])]++
 		mutex.Unlock()
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 
 	var wait sync.WaitGroup
@@ -77,9 +77,9 @@ func TestConfiguredExecutionLimitIsPerSimulation(t *testing.T) {
 	var callbacks atomic.Int64
 	simulator := NewBuilder().
 		Limits(&Limits{MaxExecutionSteps: 1}).
-		Command("record", func(context.Context, *CommandContext, *Invocation) (*CommandResult, error) {
+		Command("record", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			callbacks.Add(1)
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 

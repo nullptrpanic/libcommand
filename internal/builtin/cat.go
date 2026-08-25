@@ -16,7 +16,7 @@ func init() {
 func executeCat(ctx context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	arguments, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.UnresolvedResult(), nil
+		return unresolvedCommandResult(shell), nil
 	}
 
 	operands := make([]string, 0, len(arguments))
@@ -27,7 +27,7 @@ func executeCat(ctx context.Context, shell *runtime.CommandContext, invocation *
 			continue
 		}
 		if options && argument != "-" && strings.HasPrefix(argument, "-") {
-			return catFailure(fmt.Sprintf("cat: unsupported option %q\n", argument)), nil
+			return commandResult(shell, nil, []byte(fmt.Sprintf("cat: unsupported option %q\n", argument)), 1), nil
 		}
 		operands = append(operands, argument)
 	}
@@ -61,12 +61,7 @@ func executeCat(ctx context.Context, shell *runtime.CommandContext, invocation *
 				if stdinConsumed {
 					shell.SetInput(nil, false)
 				}
-				result := &runtime.CommandResult{
-					Stdout:   stdout,
-					Stderr:   []byte(fmt.Sprintf("cat: %s: Is a directory\n", operand)),
-					ExitCode: 1,
-				}
-				return shell.ResultUnknown(result, stdoutUnknown, stderrUnknown, exitUnknown), nil
+				return uncertainCommandResult(shell, stdout, []byte(fmt.Sprintf("cat: %s: Is a directory\n", operand)), 1, stdoutUnknown, stderrUnknown, exitUnknown), nil
 			}
 			var exists bool
 			contents, unknown, exists = shell.ReadFile(name)
@@ -88,9 +83,5 @@ func executeCat(ctx context.Context, shell *runtime.CommandContext, invocation *
 		shell.SetInput(nil, false)
 	}
 
-	return shell.ResultUnknown(&runtime.CommandResult{Stdout: stdout}, stdoutUnknown, stderrUnknown, exitUnknown), nil
-}
-
-func catFailure(message string) *runtime.CommandResult {
-	return &runtime.CommandResult{Stderr: []byte(message), ExitCode: 1}
+	return uncertainCommandResult(shell, stdout, nil, 0, stdoutUnknown, stderrUnknown, exitUnknown), nil
 }

@@ -22,7 +22,7 @@ func executeRead(ctx context.Context, shell *runtime.CommandContext, invocation 
 	}
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	raw := false
 	arrayName := ""
@@ -43,13 +43,13 @@ func executeRead(ctx context.Context, shell *runtime.CommandContext, invocation 
 		case "-a":
 			index++
 			if index >= len(args) {
-				return readUsageError(), nil
+				return readUsageError(shell), nil
 			}
 			arrayName = args[index]
 		case "-d":
 			index++
 			if index >= len(args) {
-				return readUsageError(), nil
+				return readUsageError(shell), nil
 			}
 			if args[index] == "" {
 				delimiter = 0
@@ -59,35 +59,35 @@ func executeRead(ctx context.Context, shell *runtime.CommandContext, invocation 
 		case "-n", "-N":
 			index++
 			if index >= len(args) {
-				return readUsageError(), nil
+				return readUsageError(shell), nil
 			}
 			var valid bool
 			maximum, valid = parseNonNegative(args[index])
 			if !valid {
-				return readUsageError(), nil
+				return readUsageError(shell), nil
 			}
 			exact = option == "-N"
 		case "-u":
 			index++
 			if index >= len(args) {
-				return readUsageError(), nil
+				return readUsageError(shell), nil
 			}
 			fileDescriptor, valid := parseNonNegative(args[index])
 			if !valid {
-				return readUsageError(), nil
+				return readUsageError(shell), nil
 			}
 			if fileDescriptor != 0 {
-				return &runtime.CommandResult{Stderr: []byte("read: only file descriptor 0 is supported\n"), ExitCode: 2}, nil
+				return commandResult(shell, nil, []byte("read: only file descriptor 0 is supported\n"), 2), nil
 			}
 		case "-t":
-			return &runtime.CommandResult{Stderr: []byte("read: -t is not supported\n"), ExitCode: 2}, nil
+			return commandResult(shell, nil, []byte("read: -t is not supported\n"), 2), nil
 		case "-p", "-i":
 			index++
 			if index >= len(args) {
-				return readUsageError(), nil
+				return readUsageError(shell), nil
 			}
 		default:
-			return readUsageError(), nil
+			return readUsageError(shell), nil
 		}
 		index++
 	}
@@ -114,7 +114,7 @@ func executeRead(ctx context.Context, shell *runtime.CommandContext, invocation 
 				}
 			}
 		}
-		return shell.ResultUnknown(&runtime.CommandResult{}, false, false, true), nil
+		return unresolvedExitCommandResult(shell, 0), nil
 	}
 	line, terminated := consumeReadInput(shell, delimiter, maximum, exact, raw)
 	if arrayName != "" {
@@ -138,9 +138,9 @@ func executeRead(ctx context.Context, shell *runtime.CommandContext, invocation 
 			}
 		}
 		if !terminated {
-			return &runtime.CommandResult{ExitCode: 1}, nil
+			return commandResult(shell, nil, nil, 1), nil
 		}
-		return &runtime.CommandResult{}, nil
+		return commandResult(shell, nil, nil, 0), nil
 	}
 	var escaped []bool
 	if !raw {
@@ -166,38 +166,38 @@ func executeRead(ctx context.Context, shell *runtime.CommandContext, invocation 
 		return result, nil
 	}
 	if !terminated {
-		return &runtime.CommandResult{ExitCode: 1}, nil
+		return commandResult(shell, nil, nil, 1), nil
 	}
-	return &runtime.CommandResult{}, nil
+	return commandResult(shell, nil, nil, 0), nil
 }
 
 func readTargetFailure(shell *runtime.CommandContext, arrayName string, names []string, terminated bool) *runtime.CommandResult {
 	if arrayName != "" {
 		if !syntax.ValidName(arrayName) {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("read: `%s': not a valid identifier\n", arrayName)), ExitCode: 1}
+			return commandResult(shell, nil, []byte(fmt.Sprintf("read: `%s': not a valid identifier\n", arrayName)), 1)
 		}
 		if shell.Variable(arrayName).ReadOnly {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("read: %s: readonly variable\n", arrayName)), ExitCode: 1}
+			return commandResult(shell, nil, []byte(fmt.Sprintf("read: %s: readonly variable\n", arrayName)), 1)
 		}
 		return nil
 	}
 	for _, name := range names {
 		if !syntax.ValidName(name) {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("read: `%s': not a valid identifier\n", name)), ExitCode: 1}
+			return commandResult(shell, nil, []byte(fmt.Sprintf("read: `%s': not a valid identifier\n", name)), 1)
 		}
 		if shell.Variable(name).ReadOnly {
 			exitCode := 0
 			if !terminated {
 				exitCode = 1
 			}
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("read: %s: readonly variable\n", name)), ExitCode: exitCode}
+			return commandResult(shell, nil, []byte(fmt.Sprintf("read: %s: readonly variable\n", name)), exitCode)
 		}
 	}
 	return nil
 }
 
-func readUsageError() *runtime.CommandResult {
-	return &runtime.CommandResult{Stderr: []byte("read: invalid option\n"), ExitCode: 2}
+func readUsageError(shell *runtime.CommandContext) *runtime.CommandResult {
+	return commandResult(shell, nil, []byte("read: invalid option\n"), 2)
 }
 
 func decodeReadBackslashes(value string) (string, []bool) {
@@ -353,23 +353,23 @@ func assignReadFields(shell *runtime.CommandContext, names []string, fields []*r
 		}
 		values[index] = &expand.Variable{Set: true, Kind: expand.String, Str: value}
 	}
-	result := &runtime.CommandResult{}
+	exitCode := 0
 	if !terminated {
-		result.ExitCode = 1
+		exitCode = 1
 	}
+	var stderr []byte
 	for index, name := range names {
 		if !syntax.ValidName(name) {
-			result.Stderr = append(result.Stderr, fmt.Sprintf("read: `%s': not a valid identifier\n", name)...)
-			result.ExitCode = 1
-			return result, nil
+			stderr = append(stderr, fmt.Sprintf("read: `%s': not a valid identifier\n", name)...)
+			return commandResult(shell, nil, stderr, 1), nil
 		}
 		if shell.Variable(name).ReadOnly {
-			result.Stderr = append(result.Stderr, fmt.Sprintf("read: %s: readonly variable\n", name)...)
+			stderr = append(stderr, fmt.Sprintf("read: %s: readonly variable\n", name)...)
 			continue
 		}
 		if err := shell.AssignVariable(name, values[index], false); err != nil {
 			return nil, err
 		}
 	}
-	return result, nil
+	return commandResult(shell, nil, stderr, exitCode), nil
 }

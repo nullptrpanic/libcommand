@@ -20,8 +20,28 @@ func parseForTest(t testing.TB, source, name string) *syntax.File {
 	return file
 }
 
-func noOpDispatch(context.Context, *State, *Invocation) (*CommandResult, error) {
-	return &CommandResult{}, nil
+func resultForTest(state *State, stdout, stderr []byte, exitCode int) *CommandResult {
+	return uncertainResultForTest(state, stdout, stderr, exitCode, false, false, false)
+}
+
+func stoppedResultForTest(state *State, stdout, stderr []byte, exitCode int) *CommandResult {
+	result := resultForTest(state, stdout, stderr, exitCode)
+	result.Action = CommandStop
+	return result
+}
+
+func uncertainResultForTest(state *State, stdout, stderr []byte, exitCode int, stdoutUnresolved, stderrUnresolved, exitUnresolved bool) *CommandResult {
+	result := &CommandResult{}
+	result.AddOutput(state, &CommandOutput{
+		Stdout:   newUncertain(stdout, stdoutUnresolved),
+		Stderr:   newUncertain(stderr, stderrUnresolved),
+		ExitCode: newUncertain(exitCode, exitUnresolved),
+	})
+	return result
+}
+
+func noOpDispatch(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
+	return resultForTest(state, nil, nil, 0), nil
 }
 
 func lookupAllCommands(command testCommand) CommandLookupFunc {
@@ -38,11 +58,11 @@ func runtimeTestBuiltin(name string) *CommandDefinition {
 	switch name {
 	case ":", "true":
 		definition.Command = func(_ context.Context, execution *CommandContext, _ *Invocation) (*CommandResult, error) {
-			return &CommandResult{}, nil
+			return execution.Result(execution.Output().Build()), nil
 		}
 	case "false":
 		definition.Command = func(_ context.Context, execution *CommandContext, _ *Invocation) (*CommandResult, error) {
-			return &CommandResult{ExitCode: 1}, nil
+			return execution.Result(execution.Output().ExitCode(Resolved(1)).Build()), nil
 		}
 	case "echo":
 		definition.Command = func(_ context.Context, execution *CommandContext, invocation *Invocation) (*CommandResult, error) {
@@ -55,7 +75,7 @@ func runtimeTestBuiltin(name string) *CommandDefinition {
 			values := make([]string, len(arguments))
 			for index, argument := range arguments {
 				if argument.Kind != ArgumentString {
-					return execution.ResultUnknown(&CommandResult{}, true, false, false), nil
+					return execution.Result(execution.Output().Stdout(Unresolved[[]byte](nil)).Build()), nil
 				}
 				values[index] = argument.Value
 			}
@@ -63,7 +83,7 @@ func runtimeTestBuiltin(name string) *CommandDefinition {
 			if newline {
 				output += "\n"
 			}
-			return &CommandResult{Stdout: []byte(output)}, nil
+			return execution.Result(execution.Output().Stdout(Resolved([]byte(output))).Build()), nil
 		}
 	case "set":
 		definition.Command = runtimeTestSetCommand
@@ -139,12 +159,12 @@ func evaluateForTest(ctx context.Context, file *syntax.File, request *Request, c
 func requireCancellationAfterDispatch(t testing.TB, expectedCommand string, evaluate func(*ExecutionContext, *State) ([]*pathResult, error)) {
 	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
-	e, s := newExecutorForTest(ctx, 20, &Request{}, func(_ context.Context, _ *State, command *Invocation) (*CommandResult, error) {
+	e, s := newExecutorForTest(ctx, 20, &Request{}, func(_ context.Context, state *State, command *Invocation) (*CommandResult, error) {
 		if command.Name != expectedCommand {
 			t.Fatalf("unexpected dispatch=%#v", command)
 		}
 		cancel()
-		return &CommandResult{}, nil
+		return resultForTest(state, nil, nil, 0), nil
 	})
 	paths, err := evaluate(e, s)
 	if !errors.Is(err, context.Canceled) || len(paths) != 1 || paths[0].status != StatusIncomplete {

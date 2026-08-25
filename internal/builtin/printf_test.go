@@ -32,7 +32,7 @@ func TestPreparePrintfFormatDoesNotAllocatePerFlag(t *testing.T) {
 				allocations = testing.AllocsPerRun(5, func() {
 					_, _, _, _, _, _ = preparePrintfFormat(command, format, []string{"1", "value"})
 				})
-				return &runtime.CommandResult{}, nil
+				return command.Result(command.Output().Build()), nil
 			},
 		},
 	})

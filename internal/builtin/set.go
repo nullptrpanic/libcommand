@@ -29,11 +29,11 @@ func init() {
 func executeSet(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	if len(args) == 0 {
-		result, stdoutUnknown := queryShellVariables(shell)
-		return shell.ResultUnknown(result, stdoutUnknown, false, false), nil
+		stdout, stderr, exitCode, stdoutUnknown := queryShellVariables(shell)
+		return uncertainCommandResult(shell, stdout, stderr, exitCode, stdoutUnknown, false, false), nil
 	}
 	setArguments := false
 	remaining := args
@@ -57,19 +57,19 @@ func executeSet(_ context.Context, shell *runtime.CommandContext, invocation *ru
 			option := argument[index]
 			if option == 'o' {
 				if index+1 < len(argument) {
-					return &runtime.CommandResult{Stderr: []byte("set: invalid option name\n"), ExitCode: 2}, nil
+					return commandResult(shell, nil, []byte("set: invalid option name\n"), 2), nil
 				}
 				if len(remaining) == 1 {
 					return queryNamedShellOptions(shell, enabled), nil
 				}
 				if !shell.SetOption(remaining[1], enabled) {
-					return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("set: %s: invalid option name\n", remaining[1])), ExitCode: 2}, nil
+					return commandResult(shell, nil, []byte(fmt.Sprintf("set: %s: invalid option name\n", remaining[1])), 2), nil
 				}
 				remaining = remaining[1:]
 				break
 			}
 			if !setShortShellOption(shell, option, enabled) {
-				return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("set: -%c: invalid option\n", option)), ExitCode: 2}, nil
+				return commandResult(shell, nil, []byte(fmt.Sprintf("set: -%c: invalid option\n", option)), 2), nil
 			}
 		}
 		remaining = remaining[1:]
@@ -77,7 +77,7 @@ func executeSet(_ context.Context, shell *runtime.CommandContext, invocation *ru
 	if setArguments {
 		shell.ReplacePositionalArguments(remaining)
 	}
-	return &runtime.CommandResult{}, nil
+	return commandResult(shell, nil, nil, 0), nil
 }
 
 func setShortShellOption(shell *runtime.CommandContext, option byte, enabled bool) bool {
@@ -94,29 +94,27 @@ func setShortShellOption(shell *runtime.CommandContext, option byte, enabled boo
 	return exists && shell.SetOption(name, enabled)
 }
 
-func queryShellVariables(shell *runtime.CommandContext) (*runtime.CommandResult, bool) {
+func queryShellVariables(shell *runtime.CommandContext) (stdout, stderr []byte, exitCode int, unknown bool) {
 	maximum := shell.MaxMemoryBytes()
 	var output strings.Builder
-	result := &runtime.CommandResult{}
-	unknown := false
 	shell.EachVariable(func(name string, value *expand.Variable) bool {
 		if !syntax.ValidName(name) {
 			return true
 		}
 		line := name + "=" + quoteShellWord(value.String()) + "\n"
 		if _, ok := materialize.Add(output.Len(), len(line), maximum); !ok {
-			result.Stderr = []byte("set: output exceeds materialization limit\n")
-			result.ExitCode = 1
+			stderr = []byte("set: output exceeds materialization limit\n")
+			exitCode = 1
 			return false
 		}
 		unknown = unknown || shell.VariableUnknown(name)
 		output.WriteString(line)
 		return true
 	})
-	if result.ExitCode == 0 {
-		result.Stdout = []byte(output.String())
+	if exitCode == 0 {
+		stdout = []byte(output.String())
 	}
-	return result, unknown
+	return stdout, stderr, exitCode, unknown
 }
 
 func queryNamedShellOptions(shell *runtime.CommandContext, table bool) *runtime.CommandResult {
@@ -133,7 +131,7 @@ func queryNamedShellOptions(shell *runtime.CommandContext, table bool) *runtime.
 		}
 		fmt.Fprintf(&output, "set %so %s\n", operator, name)
 	}
-	return &runtime.CommandResult{Stdout: []byte(output.String())}
+	return commandResult(shell, []byte(output.String()), nil, 0)
 }
 
 func quoteShellWord(value string) string {

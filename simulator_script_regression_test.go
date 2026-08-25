@@ -39,13 +39,13 @@ func TestRepositoryScript06DiscoversLarkCommand(t *testing.T) {
 func TestRepositoryScript14ContinuesAfterUnknownEval(t *testing.T) {
 	source := repositoryScriptSource(t, "14-dynamic-source-boundary.sh")
 	var calls []string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		arguments := argumentStrings(t, invocation)
 		if len(arguments) < 2 {
 			t.Fatalf("arguments = %#v", arguments)
 		}
 		calls = append(calls, arguments[1])
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {
 		t.Fatal(err)
@@ -59,14 +59,14 @@ func repositoryScriptChatIDs(t testing.TB, name string) []string {
 	t.Helper()
 	source := repositoryScriptSource(t, name)
 	var chatIDs []string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		arguments := argumentStrings(t, invocation)
 		index := slices.Index(arguments, "--chat-id")
 		if index < 0 || index+1 >= len(arguments) {
 			t.Fatalf("arguments = %#v", arguments)
 		}
 		chatIDs = append(chatIDs, arguments[index+1])
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {
 		t.Fatal(err)

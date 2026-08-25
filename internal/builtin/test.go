@@ -17,7 +17,7 @@ func executeTest(_ context.Context, shell *runtime.CommandContext, invocation *r
 	if name == "[" {
 		arguments := invocation.Args
 		if len(arguments) == 0 || arguments[len(arguments)-1].Kind != runtime.ArgumentString || arguments[len(arguments)-1].Value != "]" {
-			return &runtime.CommandResult{Stderr: []byte("[: missing ]\n"), ExitCode: 2}, nil
+			return commandResult(shell, nil, []byte("[: missing ]\n"), 2), nil
 		}
 		trimmed := *invocation
 		trimmed.Args = arguments[:len(arguments)-1]
@@ -25,23 +25,20 @@ func executeTest(_ context.Context, shell *runtime.CommandContext, invocation *r
 	}
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.ResultUnknown(&runtime.CommandResult{}, false, false, true), nil
+		return unresolvedExitCommandResult(shell, 0), nil
 	}
 	truth, failure := testTruth(shell, args)
 	if failure != nil {
-		return &runtime.CommandResult{
-			Stderr:   []byte(fmt.Sprintf("%s: %s\n", name, failure.message)),
-			ExitCode: failure.exitCode,
-		}, nil
+		return commandResult(shell, nil, []byte(fmt.Sprintf("%s: %s\n", name, failure.message)), failure.exitCode), nil
 	}
 	if truth == testUnknown {
-		return shell.ResultUnknown(&runtime.CommandResult{}, false, false, true), nil
+		return unresolvedExitCommandResult(shell, 0), nil
 	}
 	exitCode := 1
 	if truth == testTrue {
 		exitCode = 0
 	}
-	return &runtime.CommandResult{ExitCode: exitCode}, nil
+	return commandResult(shell, nil, nil, exitCode), nil
 }
 
 type testTruthValue uint8

@@ -18,7 +18,7 @@ func TestSimulationUserAndCommandScopedChangeUser(t *testing.T) {
 		}).
 		Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			observed = append(observed, command.State().User()+":"+argumentString(t, invocation.Args[0]))
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -55,7 +55,7 @@ func TestExecutionWrappersDispatchThroughMiddlewareAndRestoreUser(t *testing.T) 
 		Middleware(middleware).
 		Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			records = append(records, command.State().User()+":"+argumentString(t, invocation.Args[0]))
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -90,7 +90,7 @@ func TestSudoUsesRequestedUserAndTemporaryEnvironment(t *testing.T) {
 	simulator := NewBuilder().
 		Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 			observed = append(observed, command.State().User()+":"+invocation.Env["TOKEN"])
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 
@@ -135,7 +135,7 @@ func TestExecutionWrapperCommonOptionForms(t *testing.T) {
 				if got := argumentString(t, invocation.Args[0]); got != "value" {
 					t.Fatalf("record argument = %q, want value", got)
 				}
-				return &CommandResult{}, nil
+				return commandResultForTest(command, nil, nil, 0), nil
 			}).Build()
 			if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: test.source}); err != nil {
 				t.Fatal(err)
@@ -166,9 +166,9 @@ func TestExecutionWrappersFailOpenWhenNoNestedCommandCanBeSelected(t *testing.T)
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
 			var calls []string
-			simulator := NewBuilder().Command("record", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+			simulator := NewBuilder().Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 				calls = append(calls, argumentString(t, invocation.Args[0]))
-				return &CommandResult{}, nil
+				return commandResultForTest(command, nil, nil, 0), nil
 			}).Build()
 
 			if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: test.source}); err != nil {
@@ -185,7 +185,7 @@ func TestSudoUserIsInheritedByChildShellAndRestored(t *testing.T) {
 	var users []string
 	simulator := NewBuilder().Command("record", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 		users = append(users, command.State().User())
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	}).Build()
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{
 		Source: `sudo -u root sh -c 'record'; record`,
@@ -202,7 +202,7 @@ func TestChangedUserIsRestoredOnEveryNestedBranch(t *testing.T) {
 	observed := make(map[string]int)
 	simulator := NewBuilder().Command("record", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		observed[command.State().User()+":"+argumentString(t, invocation.Args[0])]++
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	}).Build()
 
 	source := `sudo -u root sh -c 'if feature-gate; then record yes; else record no; fi'; record after`
@@ -226,11 +226,11 @@ func TestChangeUserRollsBackWhenMemoryBudgetIsExceeded(t *testing.T) {
 			if got := command.State().User(); got != "alice" {
 				t.Fatalf("user after failed ChangeUser = %q, want alice", got)
 			}
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Command("record", func(_ context.Context, command *CommandContext, _ *Invocation) (*CommandResult, error) {
 			observed = command.State().User()
-			return &CommandResult{}, nil
+			return commandResultForTest(command, nil, nil, 0), nil
 		}).
 		Build()
 

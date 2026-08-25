@@ -20,9 +20,6 @@ func (e *ExecutionContext) evaluateBackground(s *State, statement *syntax.Stmt) 
 		e.backgroundStepLimit = previousBackgroundLimit
 	}()
 	childPaths, err := e.evaluateStatement(child, &foreground)
-	if err == nil {
-		childPaths, err = e.resolveCorrelatedExitStatuses(childPaths, sourceLocation(statement))
-	}
 	childPaths, trapErr := e.evaluateExitTraps(childPaths)
 	if err == nil {
 		err = trapErr
@@ -101,7 +98,7 @@ func (e *ExecutionContext) evaluateSubshell(s *State, subshell *syntax.Subshell)
 }
 
 func (e *ExecutionContext) evaluateSubstitutionPaths(s *State, substitution *syntax.CmdSubst) ([]*pathResult, error) {
-	if result, failures, ok, err := e.inputOnlySubstitution(s, substitution); ok || err != nil {
+	if result, ok, err := e.inputOnlySubstitution(s, substitution); ok || err != nil {
 		if err != nil {
 			var failure *redirectionFailure
 			if errors.As(err, &failure) {
@@ -118,7 +115,8 @@ func (e *ExecutionContext) evaluateSubstitutionPaths(s *State, substitution *syn
 			return []*pathResult{{state: s, status: status}}, nil
 		}
 		result.stdout = trimUncertainBytes(result.stdout, "\n")
-		return e.setSubstitutionAlternatives(s, substitution, result, failures)
+		s.setSubstitution(substitution, result)
+		return []*pathResult{{state: s, status: StatusCompleted}}, nil
 	}
 
 	child := s.clone()
@@ -151,48 +149,13 @@ func (e *ExecutionContext) evaluateSubstitutionPaths(s *State, substitution *syn
 			continue
 		}
 		stdout := trimUncertainBytes(childPath.state.stdout, "\n")
-		alternatives, alternativeErr := e.setSubstitutionAlternatives(parent, substitution, &substitutionResult{
+		parent.setSubstitution(substitution, &substitutionResult{
 			stdout:     stdout,
 			exitStatus: childPath.state.exitStatus,
-		}, substitutionFailureState(s, childPath.state.exitFailure))
-		results = append(results, alternatives...)
-		if alternativeErr != nil {
-			return results, alternativeErr
-		}
+		})
+		results = append(results, &pathResult{state: parent, status: StatusCompleted})
 	}
 	return results, err
-}
-
-func (e *ExecutionContext) setSubstitutionAlternatives(s *State, substitution *syntax.CmdSubst, result *substitutionResult, failure *substitutionFailure) ([]*pathResult, error) {
-	_, exitUnresolved := result.exitStatus.Data()
-	if !exitUnresolved || failure == nil {
-		s.setSubstitution(substitution, result)
-		return []*pathResult{{state: s, status: StatusCompleted}}, nil
-	}
-	if status := e.reserveExecutionSteps(s, 1, sourceLocation(substitution)); status != StatusCompleted {
-		return []*pathResult{{state: s, status: status}}, nil
-	}
-
-	e.ensurePathID(s)
-	parentState := e.freezeParentState(s)
-	nodeID := e.trace.currentNodeID(s)
-	paths := make([]*pathResult, 0, 2)
-	s.setSubstitution(substitution, &substitutionResult{
-		stdout:     result.stdout,
-		exitStatus: newCertain(0),
-	})
-	paths = append(paths, &pathResult{state: s, status: StatusCompleted})
-	failureState := failure.state.clone()
-	failureState.setSubstitution(substitution, &substitutionResult{
-		stdout:     failure.stdout,
-		exitStatus: newCertain(1),
-	})
-	paths = append(paths, &pathResult{state: failureState, status: StatusCompleted})
-	e.assignSuccessorPaths(parentState, nodeID, paths)
-	if err := e.checkPathsMaterialization(paths, 0, sourceLocation(substitution)); err != nil {
-		return paths, err
-	}
-	return paths, nil
 }
 
 func substitutionParent(parentState, childState *State) *State {
@@ -210,16 +173,6 @@ func inheritPathIdentity(target, source *State) {
 	target.retainedParentBytes = source.retainedParentBytes
 	target.frozen = false
 	target.frozenBytes = 0
-}
-
-func substitutionFailureState(parent, childFailure *State) *substitutionFailure {
-	if childFailure == nil {
-		return nil
-	}
-	return &substitutionFailure{
-		state:  substitutionParent(parent, childFailure),
-		stdout: trimUncertainBytes(childFailure.stdout, "\n"),
-	}
 }
 
 func mergeIssue(parent, child *State) {

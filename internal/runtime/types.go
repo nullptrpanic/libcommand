@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 )
 
@@ -78,32 +79,61 @@ const (
 )
 
 // CommandResult is the simulated process result returned by a command.
-// Returning it transfers ownership of Stdout and Stderr to the runtime; the
-// command must not mutate either slice after returning.
+// Returning it transfers ownership of every output to the runtime.
 type CommandResult struct {
-	Stdout        []byte
-	Stderr        []byte
-	ExitCode      int
-	Action        CommandAction
-	operation     *commandOperation
-	stdoutUnknown bool
-	stderrUnknown bool
-	exitUnknown   bool
-	preserveExit  bool
+	Action    CommandAction
+	operation *commandOperation
+	outputs   []*CommandOutput
+}
+
+// CommandOutput is one possible process output returned by a command. Stdout,
+// Stderr, and ExitCode must not be mutated after the command returns.
+type CommandOutput struct {
+	Stdout   *Uncertain[[]byte]
+	Stderr   *Uncertain[[]byte]
+	ExitCode *Uncertain[int]
+	state    *State
+}
+
+// CommandOutputBuilder constructs one CommandOutput. Its zero output is
+// resolved empty stdout, resolved empty stderr, and resolved exit code zero.
+type CommandOutputBuilder struct {
+	output CommandOutput
 }
 
 // AllUnresolved reports whether stdout, stderr, and exit status are all
 // unresolved. Partially unresolved results return false.
 func (r *CommandResult) AllUnresolved() bool {
-	return r != nil && r.stdoutUnknown && r.stderrUnknown && r.exitUnknown
+	_, _, _, stdoutUnresolved, stderrUnresolved, exitUnresolved := commandResultValues(r)
+	return stdoutUnresolved && stderrUnresolved && exitUnresolved
 }
 
-// NewUnresolvedResult returns a result with no representative output or exit
-// status and all three result dimensions marked unresolved. It is exported
-// only for builtin implementations in the sibling internal package; public
-// commands should use CommandContext.UnresolvedResult.
-func NewUnresolvedResult() *CommandResult {
-	return &CommandResult{stdoutUnknown: true, stderrUnknown: true, exitUnknown: true}
+func commandResultValues(result *CommandResult) (stdout, stderr []byte, exitCode int, stdoutUnresolved, stderrUnresolved, exitCodeUnresolved bool) {
+	if result == nil || len(result.outputs) == 0 {
+		return nil, nil, 0, false, false, false
+	}
+	stdout, stderr, exitCode, stdoutUnresolved, stderrUnresolved, exitCodeUnresolved = result.outputs[0].values()
+	for _, output := range result.outputs[1:] {
+		candidateStdout, candidateStderr, candidateExitCode, candidateStdoutUnresolved, candidateStderrUnresolved, candidateExitCodeUnresolved := output.values()
+		stdoutUnresolved = stdoutUnresolved || candidateStdoutUnresolved || !bytes.Equal(stdout, candidateStdout)
+		stderrUnresolved = stderrUnresolved || candidateStderrUnresolved || !bytes.Equal(stderr, candidateStderr)
+		exitCodeUnresolved = exitCodeUnresolved || candidateExitCodeUnresolved || exitCode != candidateExitCode
+	}
+	return stdout, stderr, exitCode, stdoutUnresolved, stderrUnresolved, exitCodeUnresolved
+}
+
+func (o *CommandOutput) values() (stdout, stderr []byte, exitCode int, stdoutUnresolved, stderrUnresolved, exitCodeUnresolved bool) {
+	stdout, stdoutUnresolved = o.Stdout.Data()
+	stderr, stderrUnresolved = o.Stderr.Data()
+	exitCode, exitCodeUnresolved = o.ExitCode.Data()
+	return stdout, stderr, exitCode, stdoutUnresolved, stderrUnresolved, exitCodeUnresolved
+}
+
+// Outputs returns the outputs explicitly added to this result. The slice is a
+// copy; its output values remain owned by the result and must not be mutated
+// after the command returns.
+func (r *CommandResult) Outputs() []*CommandOutput {
+	return append([]*CommandOutput(nil), r.outputs...)
 }
 
 // Command executes one command through the active simulation. Runtime path

@@ -68,7 +68,7 @@ func TestExecuteChecksCancellationBeforeEvaluation(t *testing.T) {
 func TestExecuteTreatsNilDispatchResultAsUnhandled(t *testing.T) {
 	file := parseForTest(t, `external`, "nil-result.sh")
 	err := Execute(context.Background(), file, &Request{}, &Config{
-		MaxExecutionSteps: 1, LookupCommand: lookupAllCommands(func(context.Context, *State, *Invocation) (*CommandResult, error) {
+		MaxExecutionSteps: 1, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 			return nil, nil
 		}),
 	})
@@ -81,7 +81,7 @@ func TestExecutePreservesCancellationCauseFromExecutionStepCheck(t *testing.T) {
 	file := parseForTest(t, `external`, "cancel.sh")
 	ctx := &cancelDuringCommandContext{}
 	err := Execute(ctx, file, &Request{}, &Config{
-		MaxExecutionSteps: 1, LookupCommand: lookupAllCommands(func(context.Context, *State, *Invocation) (*CommandResult, error) {
+		MaxExecutionSteps: 1, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 			t.Fatal("dispatch after cancellation")
 			return nil, nil
 		}),
@@ -130,8 +130,8 @@ func TestAppendStreamsRejectsMaterializationWithoutMutation(t *testing.T) {
 	if status != StatusIncomplete {
 		t.Fatalf("appendStreams() status = %d, want %d", status, StatusIncomplete)
 	}
-	if string(s.stdout.data) != "1234" || string(s.stderr.data) != "12" {
-		t.Fatalf("streams changed after failure: stdout=%q stderr=%q", s.stdout.data, s.stderr.data)
+	if string(s.stdout.Value) != "1234" || string(s.stderr.Value) != "12" {
+		t.Fatalf("streams changed after failure: stdout=%q stderr=%q", s.stdout.Value, s.stderr.Value)
 	}
 	if s.issue == nil || !strings.Contains(s.issue.Error(), "maximum materialized byte count 8 reached") {
 		t.Fatalf("issue = %v", s.issue)
@@ -170,7 +170,7 @@ func TestObservedUnknownExitAndErrexitForkConsumeSteps(t *testing.T) {
 		{`set -e; unknown`, 2},
 	} {
 		paths, steps, err := evaluateForTest(context.Background(), parseForTest(t, test.source, "status.sh"), &Request{}, &Config{
-			MaxExecutionSteps: test.max, LookupCommand: lookupAllCommands(func(context.Context, *State, *Invocation) (*CommandResult, error) {
+			MaxExecutionSteps: test.max, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 				return nil, nil
 			}),
 		})
@@ -226,9 +226,9 @@ func TestUnknownLoopReachesSharedExecutionStepBudget(t *testing.T) {
 
 	callbacks := 0
 	paths, executedSteps, err := evaluateForTest(context.Background(), file, &Request{}, &Config{
-		MaxExecutionSteps: 16, LookupCommand: lookupAllCommands(func(context.Context, *State, *Invocation) (*CommandResult, error) {
+		MaxExecutionSteps: 16, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 			callbacks++
-			return &CommandResult{}, nil
+			return resultForTest(state, nil, nil, 0), nil
 		}),
 	})
 	if err != nil {
@@ -304,7 +304,7 @@ func TestAssignmentOnlyLoopReachesExecutionStepBudget(t *testing.T) {
 	file := parseForTest(t, `while x=1; do x=2; done`, "loop.sh")
 
 	paths, executedSteps, err := evaluateForTest(context.Background(), file, &Request{}, &Config{
-		MaxExecutionSteps: 32, LookupCommand: lookupAllCommands(func(context.Context, *State, *Invocation) (*CommandResult, error) {
+		MaxExecutionSteps: 32, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 			t.Fatal("assignment-only loop dispatched an external command")
 			return nil, nil
 		}),
@@ -321,9 +321,9 @@ func TestCommandSubstitutionRetryDoesNotDoubleCountOuterStatement(t *testing.T) 
 	file := parseForTest(t, `outer "$(inner)"`, "substitution-budget.sh")
 	var calls []string
 	paths, executedSteps, err := evaluateForTest(context.Background(), file, &Request{}, &Config{
-		MaxExecutionSteps: 2, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+		MaxExecutionSteps: 2, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 			calls = append(calls, invocation.Name)
-			return &CommandResult{Stdout: []byte("value\n")}, nil
+			return resultForTest(state, []byte("value\n"), nil, 0), nil
 		}),
 	})
 	if err != nil {
@@ -352,12 +352,12 @@ func TestStateForkUsesCopyOnWrite(t *testing.T) {
 	parent.setSubstitution(substitution, &substitutionResult{stdout: newCertain(largeOutput), exitStatus: newCertain(7)})
 
 	child := parent.clone()
-	if &parent.stdout.data[0] != &child.stdout.data[0] || &parent.stderr.data[0] != &child.stderr.data[0] || &parent.stdin.data[0] != &child.stdin.data[0] {
+	if &parent.stdout.Value[0] != &child.stdout.Value[0] || &parent.stderr.Value[0] != &child.stderr.Value[0] || &parent.stdin.Value[0] != &child.stdin.Value[0] {
 		t.Fatal("stream buffers were copied eagerly")
 	}
 	parentSubstitution, parentHasSubstitution := parent.substitution(substitution)
 	childSubstitution, childHasSubstitution := child.substitution(substitution)
-	if !parentHasSubstitution || !childHasSubstitution || string(parentSubstitution.stdout.data) != string(childSubstitution.stdout.data) || childSubstitution.exitStatus.data != 7 {
+	if !parentHasSubstitution || !childHasSubstitution || string(parentSubstitution.stdout.Value) != string(childSubstitution.stdout.Value) || childSubstitution.exitStatus.Value != 7 {
 		t.Fatal("substitution frame was not cloned")
 	}
 
@@ -367,7 +367,7 @@ func TestStateForkUsesCopyOnWrite(t *testing.T) {
 	child.saveLocal("child-local")
 	child.setSubstitution(substitution, &substitutionResult{stdout: newCertain([]byte("child")), exitStatus: newCertain(3)})
 	child.fs.write("/child", []byte("child"), false)
-	child.stdout = newCertain(append(append([]byte(nil), child.stdout.data...), '!'))
+	child.stdout = newCertain(append(append([]byte(nil), child.stdout.Value...), '!'))
 
 	if got := parent.vars.Get("value").String(); got != "parent" {
 		t.Fatalf("parent variable = %q", got)
@@ -381,13 +381,13 @@ func TestStateForkUsesCopyOnWrite(t *testing.T) {
 	if _, exists := parent.localScopes[0]["child-local"]; exists {
 		t.Fatal("child local scope changed parent")
 	}
-	if got, exists := parent.substitution(substitution); !exists || string(got.stdout.data) != string(largeOutput) || got.exitStatus.data != 7 {
+	if got, exists := parent.substitution(substitution); !exists || string(got.stdout.Value) != string(largeOutput) || got.exitStatus.Value != 7 {
 		t.Fatal("child substitution frame changed parent")
 	}
 	if got, _ := parent.fs.readValue("/child"); got != nil {
 		t.Fatalf("child virtual file leaked to parent: %q", got)
 	}
-	if got := string(parent.stdout.data); got != "stdout" {
+	if got := string(parent.stdout.Value); got != "stdout" {
 		t.Fatalf("child stdout changed parent: %q", got)
 	}
 }

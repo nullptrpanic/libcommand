@@ -129,7 +129,7 @@ func TestSimulateTraceMarksUnresolvedFinalPathOutput(t *testing.T) {
 
 func TestSimulateTraceReportsFinalPathError(t *testing.T) {
 	simulator := libcommand.NewBuilder().Command("fail",
-		func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
+		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
 			return nil, errors.New("command failed")
 		}).Build()
 	var result *libcommand.TracePathResult
@@ -302,7 +302,7 @@ func TestSimulateTraceRecordsUnresolvedPathFork(t *testing.T) {
 	simulator := libcommand.NewBuilder().
 		Command("record", func(_ context.Context, command *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
 			statePaths[invocation.Args[0].Value] = command.State().PathID()
-			return &libcommand.CommandResult{}, nil
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).
 		Build()
 	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{
@@ -367,8 +367,8 @@ func TestSimulateTraceRecordsUnresolvedPathFork(t *testing.T) {
 func TestSimulateTraceCopiesTypedCommandInvocation(t *testing.T) {
 	var events []*libcommand.TraceEvent
 	simulator := libcommand.NewBuilder().Command("record",
-		func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return &libcommand.CommandResult{}, nil
+		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).Build()
 	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{
 		Source: "value=$(unknown-command); record \"$value\" concrete",
@@ -431,8 +431,8 @@ func TestSimulateTraceAssociatesPipelineCommandsWithTheirSyntaxNodes(t *testing.
 func TestSimulateTraceAssociatesExpandedCommandWithOuterCallSyntax(t *testing.T) {
 	var events []*libcommand.TraceEvent
 	simulator := libcommand.NewBuilder().Command("lark-cli",
-		func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return &libcommand.CommandResult{}, nil
+		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).Build()
 	const source = `"$(echo bGFyay1jbGk= | base64 -d)" value`
 	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{
@@ -457,8 +457,8 @@ func TestSimulateTraceAssociatesExpandedCommandWithOuterCallSyntax(t *testing.T)
 func TestSimulateTraceReportsVirtualFileMemory(t *testing.T) {
 	var events []*libcommand.TraceEvent
 	simulator := libcommand.NewBuilder().Command("record",
-		func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return &libcommand.CommandResult{}, nil
+		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).Build()
 	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{
 		Source: "printf payload >file\nrecord",
@@ -489,9 +489,9 @@ func TestSimulateTraceReportsVirtualFileMemory(t *testing.T) {
 func TestSimulateTraceObserverCanStopWithoutStoppingSimulation(t *testing.T) {
 	calls := 0
 	simulator := libcommand.NewBuilder().Command("record",
-		func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
+		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
 			calls++
-			return &libcommand.CommandResult{}, nil
+			return externalCommandResult(command, nil, nil, 0), nil
 		}).Build()
 	events := 0
 	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{
@@ -514,8 +514,8 @@ func TestSimulateTraceObserverCanStopWithoutStoppingSimulation(t *testing.T) {
 func TestSimulateTraceReportsCommandAndPathCompletion(t *testing.T) {
 	var events []*libcommand.TraceEvent
 	simulator := libcommand.NewBuilder().Command("record",
-		func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return &libcommand.CommandResult{Stdout: []byte("done"), ExitCode: 7}, nil
+		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
+			return externalCommandResult(command, []byte("done"), nil, 7), nil
 		}).Build()
 	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{Source: "record"}, collectTrace(&events))
 	if err != nil {
@@ -565,7 +565,7 @@ func TestSimulateTraceOverallUnresolvedRequiresEveryResultDimension(t *testing.T
 	var result *libcommand.TraceCommandResult
 	simulator := libcommand.NewBuilder().Command("partial",
 		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return command.ResultUnknown(&libcommand.CommandResult{}, true, false, false), nil
+			return externalUncertainCommandResult(command, nil, nil, 0, true, false, false), nil
 		}).Build()
 	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{Source: "partial"}, func(event *libcommand.TraceEvent) bool {
 		if event.Kind == libcommand.TraceCommandFinished {
@@ -584,11 +584,11 @@ func TestSimulateTraceOverallUnresolvedRequiresEveryResultDimension(t *testing.T
 	}
 }
 
-func TestCommandContextUnresolvedResultMarksEveryResultDimension(t *testing.T) {
+func TestUnresolvedCommandOutputMarksEveryResultDimension(t *testing.T) {
 	var result *libcommand.TraceCommandResult
 	simulator := libcommand.NewBuilder().Command("unknown",
 		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return command.UnresolvedResult(), nil
+			return externalUnresolvedCommandResult(command), nil
 		}).Build()
 	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{Source: "unknown"}, func(event *libcommand.TraceEvent) bool {
 		if event.Kind == libcommand.TraceCommandFinished {
@@ -607,7 +607,7 @@ func TestCommandContextUnresolvedResultMarksEveryResultDimension(t *testing.T) {
 func TestSimulateTraceErrorResultIsNotWhollyUnresolved(t *testing.T) {
 	var result *libcommand.TraceCommandResult
 	simulator := libcommand.NewBuilder().Command("fail",
-		func(context.Context, *libcommand.CommandContext, *libcommand.Invocation) (*libcommand.CommandResult, error) {
+		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
 			return nil, errors.New("failed")
 		}).Build()
 	err := simulator.SimulateTrace(context.Background(), &libcommand.SimulationRequest{Source: "fail"}, func(event *libcommand.TraceEvent) bool {
@@ -630,7 +630,7 @@ func TestSimulateTraceErrorResultIsNotWhollyUnresolved(t *testing.T) {
 func TestSimulateTraceSnapshotsCaptureCurrentCommandOutput(t *testing.T) {
 	simulator := libcommand.NewBuilder().Command("unknown-command",
 		func(_ context.Context, command *libcommand.CommandContext, _ *libcommand.Invocation) (*libcommand.CommandResult, error) {
-			return command.UnresolvedResult(), nil
+			return externalUnresolvedCommandResult(command), nil
 		}).Build()
 	var unknownResult, echoResult *libcommand.TraceCommandResult
 	activeCommands := make(map[uint64]string)

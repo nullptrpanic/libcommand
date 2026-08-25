@@ -14,7 +14,11 @@ func commandResult(ctx context.Context, shell *libcommand.CommandContext, invoca
 	if riskType != "" {
 		return nil, &DetectionError{Command: invocation.Name, Type: riskType}
 	}
-	return shell.UnresolvedResult(), nil
+	return shell.Result(shell.Output().
+		Stdout(libcommand.Unresolved[[]byte](nil)).
+		Stderr(libcommand.Unresolved[[]byte](nil)).
+		ExitCode(libcommand.Unresolved(0)).
+		Build()), nil
 }
 
 func argumentRiskResult(

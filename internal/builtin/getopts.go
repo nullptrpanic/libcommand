@@ -20,24 +20,24 @@ func init() {
 func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	if len(args) < 2 {
-		return &runtime.CommandResult{Stderr: []byte("getopts: usage: getopts optstring name [arg ...]\n"), ExitCode: 2}, nil
+		return commandResult(shell, nil, []byte("getopts: usage: getopts optstring name [arg ...]\n"), 2), nil
 	}
 	optionString, variableName := args[0], args[1]
-	finish := func(result *runtime.CommandResult) *runtime.CommandResult {
+	finish := func(output *runtime.CommandOutput) *runtime.CommandResult {
 		if !syntax.ValidName(variableName) {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: `%s': not a valid identifier\n", variableName)), ExitCode: 1}
+			return commandResult(shell, nil, []byte(fmt.Sprintf("getopts: `%s': not a valid identifier\n", variableName)), 1)
 		}
 		if shell.Variable(variableName).ReadOnly {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: %s: readonly variable\n", variableName)), ExitCode: 1}
+			return commandResult(shell, nil, []byte(fmt.Sprintf("getopts: %s: readonly variable\n", variableName)), 1)
 		}
-		return result
+		return shell.Result(output)
 	}
 	if shell.VariableUnknown("OPTIND") {
 		markGetoptsStateUnknown(shell, variableName)
-		return finish(shell.ResultUnknown(&runtime.CommandResult{}, false, true, true)), nil
+		return finish(uncertainCommandOutput(nil, nil, 0, false, true, true)), nil
 	}
 
 	positional := args[2:]
@@ -64,7 +64,7 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 		if state.index > len(positional) {
 			setGetoptsIndex(shell, state)
 			unsetGetoptsValue(shell, "OPTARG")
-			return finish(&runtime.CommandResult{ExitCode: 1}), nil
+			return finish(commandOutput(nil, nil, 1)), nil
 		}
 		token := positional[state.index-1]
 		if token == "--" {
@@ -72,12 +72,12 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 			state.offset = 1
 			setGetoptsIndex(shell, state)
 			unsetGetoptsValue(shell, "OPTARG")
-			return finish(&runtime.CommandResult{ExitCode: 1}), nil
+			return finish(commandOutput(nil, nil, 1)), nil
 		}
 		if len(token) < 2 || token[0] != '-' {
 			setGetoptsIndex(shell, state)
 			unsetGetoptsValue(shell, "OPTARG")
-			return finish(&runtime.CommandResult{ExitCode: 1}), nil
+			return finish(commandOutput(nil, nil, 1)), nil
 		}
 		if state.offset >= len(token) {
 			state.index++
@@ -95,10 +95,10 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 			setGetoptsValue(shell, variableName, "?")
 			if silent {
 				setGetoptsValue(shell, "OPTARG", string(option))
-				return finish(&runtime.CommandResult{}), nil
+				return finish(commandOutput(nil, nil, 0)), nil
 			}
 			unsetGetoptsValue(shell, "OPTARG")
-			return finish(&runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: illegal option -- %c\n", option))}), nil
+			return finish(commandOutput(nil, []byte(fmt.Sprintf("getopts: illegal option -- %c\n", option)), 0)), nil
 		}
 
 		requiresArgument := position+1 < len(trimmed) && trimmed[position+1] == ':'
@@ -106,7 +106,7 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 			finishGetoptsToken(shell, state, token)
 			setGetoptsValue(shell, variableName, string(option))
 			unsetGetoptsValue(shell, "OPTARG")
-			return finish(&runtime.CommandResult{}), nil
+			return finish(commandOutput(nil, nil, 0)), nil
 		}
 
 		argument := ""
@@ -126,16 +126,16 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 			if silent {
 				setGetoptsValue(shell, variableName, ":")
 				setGetoptsValue(shell, "OPTARG", string(option))
-				return finish(&runtime.CommandResult{}), nil
+				return finish(commandOutput(nil, nil, 0)), nil
 			}
 			setGetoptsValue(shell, variableName, "?")
 			unsetGetoptsValue(shell, "OPTARG")
-			return finish(&runtime.CommandResult{Stderr: []byte(fmt.Sprintf("getopts: option requires an argument -- %c\n", option))}), nil
+			return finish(commandOutput(nil, []byte(fmt.Sprintf("getopts: option requires an argument -- %c\n", option)), 0)), nil
 		}
 		setGetoptsIndex(shell, state)
 		setGetoptsValue(shell, variableName, string(option))
 		setGetoptsValue(shell, "OPTARG", argument)
-		return finish(&runtime.CommandResult{}), nil
+		return finish(commandOutput(nil, nil, 0)), nil
 	}
 }
 

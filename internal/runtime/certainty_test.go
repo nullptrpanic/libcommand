@@ -29,7 +29,7 @@ func TestUnknownOutputCertaintyRouting(t *testing.T) {
 			MaxExecutionSteps: 10, LookupCommand: lookupAllCommands(unregistered),
 		})
 		path := mustPath(t, paths)
-		if err != nil || !path.state.stdout.unresolved || !path.state.stderr.unresolved {
+		if err != nil || !path.state.stdout.Unresolved || !path.state.stderr.Unresolved {
 			t.Fatalf("path=%#v err=%v", path, err)
 		}
 	})
@@ -40,7 +40,7 @@ func TestUnknownOutputCertaintyRouting(t *testing.T) {
 		})
 		path := mustPath(t, paths)
 		_, fileUnknown := path.state.fs.readValue("/file")
-		if err != nil || path.state.stdout.unresolved || !path.state.stderr.unresolved || !fileUnknown {
+		if err != nil || path.state.stdout.Unresolved || !path.state.stderr.Unresolved || !fileUnknown {
 			t.Fatalf("path=%#v fileUnknown=%t err=%v", path, fileUnknown, err)
 		}
 	})
@@ -51,22 +51,22 @@ func TestUnknownOutputCertaintyRouting(t *testing.T) {
 		})
 		path := mustPath(t, paths)
 		contents, fileUnknown := path.state.fs.readValue("/file")
-		if err != nil || path.state.stdout.unresolved || path.state.stderr.unresolved || fileUnknown || string(contents) != "known\n" {
+		if err != nil || path.state.stdout.Unresolved || path.state.stderr.Unresolved || fileUnknown || string(contents) != "known\n" {
 			t.Fatalf("path=%#v file=%q unknown=%t err=%v", path, contents, fileUnknown, err)
 		}
 	})
 
 	t.Run("pipeline right output", func(t *testing.T) {
 		paths, _, err := evaluateForTest(context.Background(), parseForTest(t, `known | unknown`, "unknown-output.sh"), &Request{}, &Config{
-			MaxExecutionSteps: 10, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+			MaxExecutionSteps: 10, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 				if invocation.Name == "known" {
-					return &CommandResult{Stdout: []byte("known\n")}, nil
+					return resultForTest(state, []byte("known\n"), nil, 0), nil
 				}
 				return nil, nil
 			}),
 		})
 		path := mustPath(t, paths)
-		if err != nil || !path.state.stdout.unresolved || !path.state.stderr.unresolved {
+		if err != nil || !path.state.stdout.Unresolved || !path.state.stderr.Unresolved {
 			t.Fatalf("path=%#v err=%v", path, err)
 		}
 	})
@@ -82,7 +82,7 @@ func TestUnknownSubstitutionCertainty(t *testing.T) {
 	paths, err := e.evaluateSubstitutionPaths(s, substitution)
 	path := mustPath(t, paths)
 	result, exists := path.state.substitution(substitution)
-	if err != nil || !exists || !result.stdout.unresolved {
+	if err != nil || !exists || !result.stdout.Unresolved {
 		t.Fatalf("result=%#v exists=%t path=%#v err=%v", result, exists, path, err)
 	}
 
@@ -93,7 +93,7 @@ func TestUnknownSubstitutionCertainty(t *testing.T) {
 	paths, err = e.evaluateSubstitutionPaths(combinedState, combinedSubstitution)
 	path = mustPath(t, paths)
 	result, exists = path.state.substitution(combinedSubstitution)
-	if err != nil || !exists || !result.stdout.unresolved || path.state.stderr.unresolved {
+	if err != nil || !exists || !result.stdout.Unresolved || path.state.stderr.Unresolved {
 		t.Fatalf("combined result=%#v exists=%t path=%#v err=%v", result, exists, path, err)
 	}
 
@@ -107,7 +107,7 @@ func TestUnknownSubstitutionCertainty(t *testing.T) {
 	paths, err = e.evaluateSubstitutionPaths(inputState, inputSubstitution)
 	path = mustPath(t, paths)
 	result, exists = path.state.substitution(inputSubstitution)
-	if err != nil || !exists || !result.stdout.unresolved || string(result.stdout.data) != "representative" {
+	if err != nil || !exists || !result.stdout.Unresolved || string(result.stdout.Value) != "representative" {
 		t.Fatalf("input result=%#v exists=%t path=%#v err=%v", result, exists, path, err)
 	}
 }
@@ -180,9 +180,9 @@ else
 fi
 `
 	paths, _, err := evaluateForTest(context.Background(), parseForTest(t, script, "unknown-branch-assignment.sh"), &Request{}, &Config{
-		MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+		MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 			if invocation.Name == "record" {
-				return &CommandResult{}, nil
+				return resultForTest(state, nil, nil, 0), nil
 			}
 			return nil, nil
 		}),
@@ -223,12 +223,12 @@ func TestUnknownDataBooleanBranches(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var calls []string
 			paths, _, err := evaluateForTest(context.Background(), parseForTest(t, test.script, "unknown-boolean.sh"), &Request{}, &Config{
-				MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+				MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 					if invocation.Name != "record" {
 						return nil, nil
 					}
 					calls = append(calls, argumentStrings(t, invocation)...)
-					return &CommandResult{}, nil
+					return resultForTest(state, nil, nil, 0), nil
 				}),
 			})
 			if err != nil {
@@ -244,10 +244,10 @@ func TestUnknownDataBooleanBranches(t *testing.T) {
 
 	var calls []string
 	paths, _, err := evaluateForTest(context.Background(), parseForTest(t, `value=$(unknown); value=known; [[ $value ]] && record yes || record no`, "known-overwrite.sh"), &Request{}, &Config{
-		MaxExecutionSteps: 20, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+		MaxExecutionSteps: 20, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 			if invocation.Name == "record" {
 				calls = append(calls, argumentStrings(t, invocation)...)
-				return &CommandResult{}, nil
+				return resultForTest(state, nil, nil, 0), nil
 			}
 			return nil, nil
 		}),
@@ -262,10 +262,10 @@ func TestUnknownDataBooleanBranches(t *testing.T) {
 
 	calls = nil
 	paths, _, err = evaluateForTest(context.Background(), parseForTest(t, `value=$(unknown); for ((; value; )); do record body; break; done; record after`, "unknown-loop-data.sh"), &Request{}, &Config{
-		MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+		MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 			if invocation.Name == "record" {
 				calls = append(calls, argumentStrings(t, invocation)...)
-				return &CommandResult{}, nil
+				return resultForTest(state, nil, nil, 0), nil
 			}
 			return nil, nil
 		}),
@@ -324,10 +324,10 @@ func TestUnknownDataConcreteBoundaries(t *testing.T) {
 		handlerLookup := lookupCommands(func(name string) bool {
 			return name == "registered"
 		},
-			func(_ context.Context, _ *State, current *Invocation) (*CommandResult, error) {
+			func(_ context.Context, state *State, current *Invocation) (*CommandResult, error) {
 				if current.Name == "registered" {
 					invocation = current
-					return &CommandResult{}, nil
+					return resultForTest(state, nil, nil, 0), nil
 				}
 				return nil, nil
 			})
@@ -392,10 +392,10 @@ func TestUnknownStdinInputBuiltinsRemainInPipelineChild(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var calls []string
 			paths, _, err := evaluateForTest(context.Background(), parseForTest(t, test.script, "unknown-stdin.sh"), &Request{}, &Config{
-				MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+				MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 					if invocation.Name == "record" {
 						calls = append(calls, argumentStrings(t, invocation)...)
-						return &CommandResult{}, nil
+						return resultForTest(state, nil, nil, 0), nil
 					}
 					return nil, nil
 				}),
@@ -430,10 +430,10 @@ replaced=${value/x/y}
 `
 	probeCalls := 0
 	paths, _, err := evaluateForTest(context.Background(), parseForTest(t, script, "unknown-parameter.sh"), &Request{}, &Config{
-		MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+		MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 			if invocation.Name == "probe" {
 				probeCalls++
-				return &CommandResult{Stdout: []byte("probe\n")}, nil
+				return resultForTest(state, []byte("probe\n"), nil, 0), nil
 			}
 			return nil, nil
 		}),
@@ -456,10 +456,10 @@ replaced=${value/x/y}
 			probeCalls := 0
 			source := "value=$(unknown); result=${value" + operator + "$(probe)}"
 			paths, _, err := evaluateForTest(context.Background(), parseForTest(t, source, "unknown-colon-parameter.sh"), &Request{}, &Config{
-				MaxExecutionSteps: 20, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+				MaxExecutionSteps: 20, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 					if invocation.Name == "probe" {
 						probeCalls++
-						return &CommandResult{Stdout: []byte("probe\n")}, nil
+						return resultForTest(state, []byte("probe\n"), nil, 0), nil
 					}
 					return nil, nil
 				}),
@@ -473,10 +473,10 @@ replaced=${value/x/y}
 
 	probeCalls = 0
 	paths, _, err = evaluateForTest(context.Background(), parseForTest(t, `known=present; result=${known:-$(probe)}; empty=${missing:+$(probe)}`, "known-parameter.sh"), &Request{}, &Config{
-		MaxExecutionSteps: 10, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+		MaxExecutionSteps: 10, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 			if invocation.Name == "probe" {
 				probeCalls++
-				return &CommandResult{Stdout: []byte("probe\n")}, nil
+				return resultForTest(state, []byte("probe\n"), nil, 0), nil
 			}
 			return nil, nil
 		}),
@@ -521,10 +521,10 @@ func TestUnknownDataAdditionalConsumers(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			var calls []string
 			paths, _, err := evaluateForTest(context.Background(), parseForTest(t, test.script, "unknown-additional.sh"), &Request{}, &Config{
-				MaxExecutionSteps: 40, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+				MaxExecutionSteps: 40, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 					if invocation.Name == "record" {
 						calls = append(calls, argumentStrings(t, invocation)...)
-						return &CommandResult{}, nil
+						return resultForTest(state, nil, nil, 0), nil
 					}
 					return nil, nil
 				}),
@@ -543,10 +543,10 @@ func TestUnknownDataAdditionalConsumers(t *testing.T) {
 	t.Run("select explores unknown stdin", func(t *testing.T) {
 		var calls []string
 		paths, _, err := evaluateForTest(context.Background(), parseForTest(t, `unknown | select choice in one two; do record "$choice"; break; done`, "unknown-select-input.sh"), &Request{}, &Config{
-			MaxExecutionSteps: 40, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, invocation *Invocation) (*CommandResult, error) {
+			MaxExecutionSteps: 40, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, invocation *Invocation) (*CommandResult, error) {
 				if invocation.Name == "record" {
 					calls = append(calls, argumentStrings(t, invocation)...)
-					return &CommandResult{}, nil
+					return resultForTest(state, nil, nil, 0), nil
 				}
 				return nil, nil
 			}),

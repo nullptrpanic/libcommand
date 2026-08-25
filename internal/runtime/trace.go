@@ -848,8 +848,9 @@ func (trace *executionTrace) commandResult(result *CommandResult, err error) *Tr
 	}
 	stdoutBytes, stderrBytes := 0, 0
 	if result != nil {
-		stdoutBytes = len(result.Stdout)
-		stderrBytes = len(result.Stderr)
+		stdout, stderr, _, _, _, _ := commandResultValues(result)
+		stdoutBytes = len(stdout)
+		stderrBytes = len(stderr)
 	}
 	remaining := trace.options.MaxSnapshotBytes - trace.snapshotBytes
 	if stdoutBytes > remaining || stderrBytes > remaining-stdoutBytes {
@@ -860,8 +861,9 @@ func (trace *executionTrace) commandResult(result *CommandResult, err error) *Tr
 	trace.snapshotBytes += stdoutBytes + stderrBytes
 	summary.OutputCaptured = true
 	if result != nil {
-		summary.Stdout = string(result.Stdout)
-		summary.Stderr = string(result.Stderr)
+		stdout, stderr, _, _, _, _ := commandResultValues(result)
+		summary.Stdout = string(stdout)
+		summary.Stderr = string(stderr)
 	}
 	return summary
 }
@@ -878,18 +880,16 @@ func traceCommandResult(result *CommandResult, err error) *TraceCommandResult {
 			Unresolved:         true,
 		}
 	}
-	stdoutUnresolved := result.stdoutUnknown
-	stderrUnresolved := result.stderrUnknown
-	exitCodeUnresolved := result.exitUnknown
+	stdout, stderr, exitCode, stdoutUnresolved, stderrUnresolved, exitCodeUnresolved := commandResultValues(result)
 	return &TraceCommandResult{
-		ExitCode:           result.ExitCode,
-		StdoutBytes:        len(result.Stdout),
-		StderrBytes:        len(result.Stderr),
+		ExitCode:           exitCode,
+		StdoutBytes:        len(stdout),
+		StderrBytes:        len(stderr),
 		Action:             result.Action,
 		StdoutUnresolved:   stdoutUnresolved,
 		StderrUnresolved:   stderrUnresolved,
 		ExitCodeUnresolved: exitCodeUnresolved,
-		Unresolved:         result.AllUnresolved(),
+		Unresolved:         stdoutUnresolved && stderrUnresolved && exitCodeUnresolved,
 	}
 }
 

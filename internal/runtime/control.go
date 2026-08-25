@@ -138,10 +138,6 @@ func (e *ExecutionContext) resolveExitStatus(path *pathResult, source *location)
 	if !unresolved {
 		return []*pathResult{path}, nil
 	}
-	failureState := path.state.exitFailure
-	if failureState == nil {
-		failureState = path.state
-	}
 	if status := e.reserveExecutionSteps(path.state, 1, source); status != StatusCompleted {
 		path.status = status
 		return []*pathResult{path}, nil
@@ -150,7 +146,7 @@ func (e *ExecutionContext) resolveExitStatus(path *pathResult, source *location)
 	success.setExitCode(0)
 	paths := make([]*pathResult, 0, 2)
 	paths = append(paths, &pathResult{state: success, status: path.status})
-	failure := failureState.clone()
+	failure := path.state.clone()
 	failure.setExitCode(1)
 	paths = append(paths, &pathResult{state: failure, status: path.status})
 	e.ensurePathID(path.state)
@@ -309,9 +305,6 @@ func (e *ExecutionContext) evaluateStatements(paths []*pathResult, statements []
 				e.errTrapSuppressed--
 			}
 			if err == nil {
-				successors, err = e.resolveCorrelatedExitStatuses(successors, sourceLocation(statement))
-			}
-			if err == nil {
 				if contextErr := e.ctx.Err(); contextErr != nil {
 					for _, successor := range successors {
 						if successor.status != StatusCompleted {
@@ -346,23 +339,6 @@ func (e *ExecutionContext) evaluateStatements(paths []*pathResult, statements []
 		}
 	}
 	return current, nil
-}
-
-func (e *ExecutionContext) resolveCorrelatedExitStatuses(paths []*pathResult, source *location) ([]*pathResult, error) {
-	result := make([]*pathResult, 0, len(paths))
-	for _, path := range paths {
-		_, exitUnresolved := path.state.exitStatus.Data()
-		if path.status != StatusCompleted || !exitUnresolved || path.state.exitFailure == nil {
-			result = append(result, path)
-			continue
-		}
-		resolved, err := e.resolveExitStatus(path, source)
-		result = append(result, resolved...)
-		if err != nil {
-			return result, err
-		}
-	}
-	return result, nil
 }
 
 func (e *ExecutionContext) recordVariableRollback(s *State, name string) {
@@ -515,9 +491,6 @@ func (e *ExecutionContext) evaluateStatementInFrame(s *State, statement *syntax.
 		positive := *statement
 		positive.Negated = false
 		paths, err := e.evaluateStatementWithoutErrexit(s, &positive)
-		if err == nil {
-			paths, err = e.resolveCorrelatedExitStatuses(paths, sourceLocation(statement))
-		}
 		for index := range paths {
 			exitCode, exitUnresolved := paths[index].state.exitStatus.Data()
 			if paths[index].status == StatusCompleted && !exitUnresolved {
@@ -657,9 +630,6 @@ func (e *ExecutionContext) evaluatePipeline(s *State, pipeline *syntax.BinaryCmd
 	left.stdin = s.stdin
 	left.resetOutput()
 	leftPaths, err := e.evaluateStatementWithoutErrexit(left, pipeline.X)
-	if err == nil {
-		leftPaths, err = e.resolveCorrelatedExitStatuses(leftPaths, sourceLocation(pipeline.X))
-	}
 	if err != nil {
 		return leftPaths, err
 	}
@@ -714,9 +684,6 @@ func (e *ExecutionContext) evaluatePipeline(s *State, pipeline *syntax.BinaryCmd
 			return append(results, rightInput), err
 		}
 		rightPaths, rightErr := e.evaluateStatementWithoutErrexit(right, pipeline.Y)
-		if rightErr == nil {
-			rightPaths, rightErr = e.resolveCorrelatedExitStatuses(rightPaths, sourceLocation(pipeline.Y))
-		}
 		for _, rightPath := range rightPaths {
 			parent := s.clone()
 			inheritPathIdentity(parent, rightPath.state)

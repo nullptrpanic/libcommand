@@ -16,7 +16,7 @@ func init() {
 func executeRM(ctx context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	arguments, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.UnresolvedResult(), nil
+		return unresolvedCommandResult(shell), nil
 	}
 
 	recursive := false
@@ -35,7 +35,7 @@ func executeRM(ctx context.Context, shell *runtime.CommandContext, invocation *r
 			case "--recursive":
 				recursive = true
 			default:
-				return rmFailure(fmt.Sprintf("rm: unsupported option %q\n", argument)), nil
+				return commandResult(shell, nil, []byte(fmt.Sprintf("rm: unsupported option %q\n", argument)), 1), nil
 			}
 			continue
 		}
@@ -47,7 +47,7 @@ func executeRM(ctx context.Context, shell *runtime.CommandContext, invocation *r
 				case 'r', 'R':
 					recursive = true
 				default:
-					return rmFailure(fmt.Sprintf("rm: unsupported option -%c\n", option)), nil
+					return commandResult(shell, nil, []byte(fmt.Sprintf("rm: unsupported option -%c\n", option)), 1), nil
 				}
 			}
 			continue
@@ -55,17 +55,18 @@ func executeRM(ctx context.Context, shell *runtime.CommandContext, invocation *r
 		operands = append(operands, argument)
 	}
 	if len(operands) == 0 {
-		return rmFailure("rm: missing operand\n"), nil
+		return commandResult(shell, nil, []byte("rm: missing operand\n"), 1), nil
 	}
 	if _, unresolved := shell.Directory(); unresolved {
 		for _, operand := range operands {
 			if !path.IsAbs(operand) {
-				return shell.UnresolvedResult(), nil
+				return unresolvedCommandResult(shell), nil
 			}
 		}
 	}
 
-	result := &runtime.CommandResult{}
+	var stderr []byte
+	exitCode := 0
 	for _, operand := range operands {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -74,23 +75,19 @@ func executeRM(ctx context.Context, shell *runtime.CommandContext, invocation *r
 		kind := shell.PathKind(name)
 		if kind == runtime.PathMissing {
 			if !force {
-				result.Stderr = append(result.Stderr, fmt.Sprintf("rm: cannot remove %q: No such file or directory\n", operand)...)
-				result.ExitCode = 1
+				stderr = append(stderr, fmt.Sprintf("rm: cannot remove %q: No such file or directory\n", operand)...)
+				exitCode = 1
 			}
 			continue
 		}
 		if kind == runtime.PathDirectory && !recursive {
-			result.Stderr = append(result.Stderr, fmt.Sprintf("rm: cannot remove %q: Is a directory\n", operand)...)
-			result.ExitCode = 1
+			stderr = append(stderr, fmt.Sprintf("rm: cannot remove %q: Is a directory\n", operand)...)
+			exitCode = 1
 			continue
 		}
 		if err := shell.RemovePath(ctx, name, recursive); err != nil {
 			return nil, err
 		}
 	}
-	return result, nil
-}
-
-func rmFailure(message string) *runtime.CommandResult {
-	return &runtime.CommandResult{Stderr: []byte(message), ExitCode: 1}
+	return commandResult(shell, nil, stderr, exitCode), nil
 }

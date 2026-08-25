@@ -6,8 +6,8 @@ import (
 )
 
 func TestCandidateLookupExcludesUnmodifiedShellDefaults(t *testing.T) {
-	command := adaptTestCommand(func(context.Context, *State, *Invocation) (*CommandResult, error) {
-		return &CommandResult{}, nil
+	command := adaptTestCommand(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
+		return resultForTest(state, nil, nil, 0), nil
 	})
 	definitions := map[string]*CommandDefinition{
 		"pwd":    {Command: command},
@@ -21,8 +21,8 @@ func TestCandidateLookupExcludesUnmodifiedShellDefaults(t *testing.T) {
 }
 
 func TestCandidateLookupExcludesEvaluatorOwnedControls(t *testing.T) {
-	command := adaptTestCommand(func(context.Context, *State, *Invocation) (*CommandResult, error) {
-		return &CommandResult{}, nil
+	command := adaptTestCommand(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
+		return resultForTest(state, nil, nil, 0), nil
 	})
 	candidate := commandCandidateLookup(func(string) *CommandDefinition {
 		return &CommandDefinition{Command: command, Candidate: true, UserOverride: true}
@@ -35,8 +35,8 @@ func TestCandidateLookupExcludesEvaluatorOwnedControls(t *testing.T) {
 }
 
 func TestCandidateLookupIncludesObservableFallback(t *testing.T) {
-	command := adaptTestCommand(func(context.Context, *State, *Invocation) (*CommandResult, error) {
-		return &CommandResult{}, nil
+	command := adaptTestCommand(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
+		return resultForTest(state, nil, nil, 0), nil
 	})
 	for _, test := range []struct {
 		name       string

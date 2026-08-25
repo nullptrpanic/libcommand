@@ -58,44 +58,44 @@ func (e *ExecutionContext) applyOutputTargets(s *State, plan *redirectionPlan, s
 	return capturedStdout, capturedStderr, capturedStdoutUnknown, capturedStderrUnknown, nil
 }
 
-func (e *ExecutionContext) inputOnlySubstitution(s *State, substitution *syntax.CmdSubst) (*substitutionResult, *substitutionFailure, bool, error) {
+func (e *ExecutionContext) inputOnlySubstitution(s *State, substitution *syntax.CmdSubst) (*substitutionResult, bool, error) {
 	if len(substitution.Stmts) != 1 {
-		return nil, nil, false, nil
+		return nil, false, nil
 	}
 	statement := substitution.Stmts[0]
 	if len(statement.Redirs) != 1 || statement.Redirs[0].Op != syntax.RdrIn {
-		return nil, nil, false, nil
+		return nil, false, nil
 	}
 	if statement.Cmd != nil {
 		call, ok := statement.Cmd.(*syntax.CallExpr)
 		if !ok || len(call.Args) != 0 || len(call.Assigns) != 0 {
-			return nil, nil, false, nil
+			return nil, false, nil
 		}
 	}
 	filename, unresolved, err := e.redirectWord(s, statement.Redirs[0].Word)
 	if err != nil {
-		return nil, nil, true, err
+		return nil, true, err
 	}
 	if unresolved || isExternalDevicePath(filename) {
 		return &substitutionResult{
 			stdout:     newUnresolved[[]byte](nil),
 			exitStatus: newUnresolved(0),
-		}, nil, true, nil
+		}, true, nil
 	}
 	directory, _ := s.dir.Data()
 	filename = s.fs.resolve(directory, filename)
 	contents, unknown, exists := s.fs.readFile(filename)
 	if !exists {
 		if err := s.fs.writeWithParents(filename, nil, false); err != nil {
-			return nil, nil, true, outputRedirectionError(filename, err)
+			return nil, true, outputRedirectionError(filename, err)
 		}
-		return &substitutionResult{stdout: newCertain[[]byte](nil), exitStatus: newCertain(0)}, nil, true, nil
+		return &substitutionResult{stdout: newCertain[[]byte](nil), exitStatus: newCertain(0)}, true, nil
 	}
 	stdout := newCertain(contents)
 	if unknown {
 		stdout = newUnresolved(contents)
 	}
-	return &substitutionResult{stdout: stdout, exitStatus: newCertain(0)}, nil, true, nil
+	return &substitutionResult{stdout: stdout, exitStatus: newCertain(0)}, true, nil
 }
 
 func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.Redirect) (*redirectionPlan, error) {

@@ -14,16 +14,16 @@ func init() {
 func executeStatePWD(_ context.Context, execution *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return execution.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(execution, 1), nil
 	}
 	for _, argument := range args {
 		if argument != "-L" && argument != "-P" && argument != "--" {
-			return &runtime.CommandResult{Stderr: []byte("pwd: invalid option\n"), ExitCode: 2}, nil
+			return commandResult(execution, nil, []byte("pwd: invalid option\n"), 2), nil
 		}
 	}
 	directory, unknown := execution.Directory()
 	if unknown {
-		return execution.ResultUnknown(&runtime.CommandResult{}, true, false, false), nil
+		return uncertainCommandResult(execution, nil, nil, 0, true, false, false), nil
 	}
 	length, ok := materialize.Add(len(directory), 1, execution.MaxMemoryBytes())
 	if !ok {
@@ -32,5 +32,5 @@ func executeStatePWD(_ context.Context, execution *runtime.CommandContext, invoc
 	output := make([]byte, 0, length)
 	output = append(output, directory...)
 	output = append(output, '\n')
-	return &runtime.CommandResult{Stdout: output}, nil
+	return commandResult(execution, output, nil, 0), nil
 }

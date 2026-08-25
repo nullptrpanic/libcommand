@@ -45,7 +45,7 @@ func TestTestFileOperators(t *testing.T) {
 			if err := execution.EnsureDirectory("/dir"); err != nil {
 				return nil, err
 			}
-			return &runtime.CommandResult{}, nil
+			return execution.Result(execution.Output().Build()), nil
 		},
 	}
 	err := executeBuiltinScript(t,

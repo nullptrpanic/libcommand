@@ -36,8 +36,8 @@ func TestRuntimeTargetedExecutionBranches(t *testing.T) {
 				t.Fatalf("paths=%#v calls=%#v err=%v", paths, calls, err)
 			}
 			requirePathStatus(t, paths, test.status)
-			if test.name == "arithmetic evaluation failure" && paths[0].state.exitStatus.data != 1 {
-				t.Fatalf("arithmetic failure exit code = %d, want 1", paths[0].state.exitStatus.data)
+			if test.name == "arithmetic evaluation failure" && paths[0].state.exitStatus.Value != 1 {
+				t.Fatalf("arithmetic failure exit code = %d, want 1", paths[0].state.exitStatus.Value)
 			}
 			if test.name == "host arithmetic forks" {
 				if len(paths) != 2 {
@@ -59,13 +59,13 @@ func TestRuntimeTargetedExecutionBranches(t *testing.T) {
 	t.Run("pipeline routes stderr only through pipe all", func(t *testing.T) {
 		file := parseForTest(t, `left | right; left |& all`, "pipe.sh")
 		var received []string
-		err := Execute(context.Background(), file, &Request{}, &Config{MaxExecutionSteps: 10, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, command *Invocation) (*CommandResult, error) {
+		err := Execute(context.Background(), file, &Request{}, &Config{MaxExecutionSteps: 10, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, command *Invocation) (*CommandResult, error) {
 			switch command.Name {
 			case "left":
-				return &CommandResult{Stderr: []byte("left-stderr\n")}, nil
+				return resultForTest(state, nil, []byte("left-stderr\n"), 0), nil
 			case "right", "all":
 				received = append(received, command.Name+":"+string(command.Stdin))
-				return &CommandResult{}, nil
+				return resultForTest(state, nil, nil, 0), nil
 			default:
 				t.Fatalf("unexpected command %#v", command)
 				return nil, nil
@@ -78,22 +78,25 @@ func TestRuntimeTargetedExecutionBranches(t *testing.T) {
 
 	t.Run("pipeline propagates handler error and stop", func(t *testing.T) {
 		results := []struct {
-			name     string
-			returned CommandResult
-			want     Status
-			wantErr  bool
+			name    string
+			stop    bool
+			want    Status
+			wantErr bool
 		}{
-			{"error", CommandResult{}, StatusIncomplete, true}, {"stop", CommandResult{Action: CommandStop}, StatusTerminated, false},
+			{"error", false, StatusIncomplete, true}, {"stop", true, StatusTerminated, false},
 		}
 		for index := range results {
 			result := &results[index]
 			t.Run(result.name, func(t *testing.T) {
 				paths, _, err := runBash(t, `left | right`, &Request{}, func(config *Config, _ *[]*dispatchedCommand) {
-					config.LookupCommand = lookupAllCommands(func(context.Context, *State, *Invocation) (*CommandResult, error) {
+					config.LookupCommand = lookupAllCommands(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 						if result.wantErr {
 							return nil, errors.New("left failed")
 						}
-						return &result.returned, nil
+						if result.stop {
+							return stoppedResultForTest(state, nil, nil, 0), nil
+						}
+						return resultForTest(state, nil, nil, 0), nil
 					})
 				})
 				if (err != nil) != result.wantErr {
@@ -109,9 +112,9 @@ func TestDispatchBehaviorFacts(t *testing.T) {
 	t.Run("nil existence callback dispatches external", func(t *testing.T) {
 		count := 0
 		err := Execute(context.Background(), parseForTest(t, `external`, "facts.sh"), &Request{}, &Config{
-			MaxExecutionSteps: 3, LookupCommand: lookupAllCommands(func(context.Context, *State, *Invocation) (*CommandResult, error) {
+			MaxExecutionSteps: 3, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 				count++
-				return &CommandResult{}, nil
+				return resultForTest(state, nil, nil, 0), nil
 			}),
 		})
 		if err != nil || count != 1 {
@@ -122,9 +125,9 @@ func TestDispatchBehaviorFacts(t *testing.T) {
 		count := 0
 		err := Execute(context.Background(), parseForTest(t, `external`, "facts.sh"), &Request{}, &Config{
 			MaxExecutionSteps: 3, LookupCommand: lookupCommands(func(string) bool { return false },
-				func(context.Context, *State, *Invocation) (*CommandResult, error) {
+				func(_ context.Context, state *State, _ *Invocation) (*CommandResult, error) {
 					count++
-					return &CommandResult{}, nil
+					return resultForTest(state, nil, nil, 0), nil
 				}),
 		})
 		if err != nil || count != 0 {
@@ -142,10 +145,10 @@ func TestDispatchBehaviorFacts(t *testing.T) {
 	t.Run("stop suppresses later dispatch", func(t *testing.T) {
 		count := 0
 		var name string
-		err := Execute(context.Background(), parseForTest(t, `first; second`, "facts.sh"), &Request{}, &Config{MaxExecutionSteps: 3, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, command *Invocation) (*CommandResult, error) {
+		err := Execute(context.Background(), parseForTest(t, `first; second`, "facts.sh"), &Request{}, &Config{MaxExecutionSteps: 3, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, command *Invocation) (*CommandResult, error) {
 			count++
 			name = command.Name
-			return &CommandResult{Stdout: []byte(command.Name), Action: CommandStop}, nil
+			return stoppedResultForTest(state, []byte(command.Name), nil, 0), nil
 		})})
 		if err != nil || count != 1 || name != "first" {
 			t.Fatalf("name=%q count=%d err=%v", name, count, err)
@@ -174,18 +177,18 @@ heredoc value
 EOF
 inspect "$answer" <<< trailing`, "files.sh")
 		var inspected [][]string
-		err := Execute(context.Background(), file, &Request{}, &Config{MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, _ *State, command *Invocation) (*CommandResult, error) {
+		err := Execute(context.Background(), file, &Request{}, &Config{MaxExecutionSteps: 30, LookupCommand: lookupAllCommands(func(_ context.Context, state *State, command *Invocation) (*CommandResult, error) {
 			switch command.Name {
 			case "emit":
-				return &CommandResult{Stdout: []byte("out"), Stderr: []byte("err")}, nil
+				return resultForTest(state, []byte("out"), []byte("err"), 0), nil
 			case "inspect":
 				inspected = append(inspected, argumentStrings(t, command))
 				if len(inspected) == 2 && string(command.Stdin) != "trailing\n" {
 					t.Fatalf("here string stdin = %q", command.Stdin)
 				}
-				return &CommandResult{}, nil
+				return resultForTest(state, nil, nil, 0), nil
 			default:
-				return &CommandResult{}, nil
+				return resultForTest(state, nil, nil, 0), nil
 			}
 		})})
 		if err != nil || !reflect.DeepEqual(inspected, [][]string{{"seed\nappend", "err", "outerr"}, {"heredoc value"}}) {
@@ -234,7 +237,7 @@ func TestDirectExecutorErrorPathsAndScopes(t *testing.T) {
 		} {
 			file := parseForTest(t, test.script, "direct.sh")
 			sub := firstCommandSubstitution(file.Stmts[0].Cmd)
-			_, _, ok, err := e.inputOnlySubstitution(s, sub)
+			_, ok, err := e.inputOnlySubstitution(s, sub)
 			if ok != test.ok || (err != nil) != test.wantErr {
 				t.Fatalf("%s: ok=%t err=%v", test.script, ok, err)
 			}
@@ -296,7 +299,7 @@ func TestControlFlowEdgeBehavior(t *testing.T) {
 			if !reflect.DeepEqual(got, test.calls) {
 				t.Fatalf("calls=%#v want=%#v", calls, test.calls)
 			}
-			if test.name == "test invalid regexp fails" && (len(paths) != 1 || paths[0].state.exitStatus.data != 2) {
+			if test.name == "test invalid regexp fails" && (len(paths) != 1 || paths[0].state.exitStatus.Value != 2) {
 				t.Fatalf("test paths=%#v", paths)
 			}
 		})

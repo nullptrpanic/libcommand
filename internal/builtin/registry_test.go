@@ -58,11 +58,32 @@ func TestDefaultRegistryOwnsEveryRoutedCallCommand(t *testing.T) {
 }
 
 func TestDefaultFallbackIsUnresolved(t *testing.T) {
-	result, err := executeFallback(context.Background(), nil, &runtime.Invocation{Name: "missing"})
+	file, err := runtime.Parse(context.Background(), "missing", "fallback.sh")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !result.AllUnresolved() {
+	definitions := Definitions()
+	var result *runtime.TraceCommandResult
+	err = runtime.Execute(context.Background(), file, &runtime.Request{}, &runtime.Config{
+		MaxExecutionSteps: 10,
+		MaxMemoryBytes:    2 << 20,
+		LookupCommand: func(name string) *runtime.CommandDefinition {
+			if definition := definitions[name]; definition != nil {
+				return definition
+			}
+			return definitions["*"]
+		},
+		Trace: func(event *runtime.TraceEvent) bool {
+			if event.Kind == runtime.TraceCommandFinished {
+				result = event.CommandResult
+			}
+			return true
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result == nil || !result.Unresolved || !result.StdoutUnresolved || !result.StderrUnresolved || !result.ExitCodeUnresolved {
 		t.Fatalf("fallback result = %#v, want unresolved", result)
 	}
 }

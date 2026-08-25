@@ -12,13 +12,22 @@ import (
 func RM(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
 	arguments, concrete := concreteArguments(invocation.Args)
 	riskType := RiskType("")
-	if concrete && recursiveRootRemoval(arguments, invocation.Dir, directoryUnresolved(invocation)) {
-		riskType = RiskTypeDestructiveOperation
+	if concrete {
+		recursive, targets := rmOptions(arguments)
+		observeRM(ctx, shell, invocation, targets)
+		if recursive && removesRoot(targets, invocation.Dir, directoryUnresolved(invocation)) {
+			riskType = RiskTypeDestructiveOperation
+		}
 	}
 	return commandResult(ctx, shell, invocation, riskType)
 }
 
 func recursiveRootRemoval(arguments []string, directory string, directoryUnknown bool) bool {
+	recursive, targets := rmOptions(arguments)
+	return recursive && removesRoot(targets, directory, directoryUnknown)
+}
+
+func rmOptions(arguments []string) (bool, []string) {
 	recursive := false
 	options := true
 	var targets []string
@@ -41,9 +50,10 @@ func recursiveRootRemoval(arguments []string, directory string, directoryUnknown
 		}
 		targets = append(targets, argument)
 	}
-	if !recursive {
-		return false
-	}
+	return recursive, targets
+}
+
+func removesRoot(targets []string, directory string, directoryUnknown bool) bool {
 	for _, target := range targets {
 		resolved, known := resolvedPath(directory, target, directoryUnknown)
 		if !known {

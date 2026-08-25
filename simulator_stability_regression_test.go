@@ -17,6 +17,32 @@ fi`
 	requireFirstArguments(t, source, []string{"outer"})
 }
 
+func TestSimulatorKeepsCDStateAcrossSavedExitStatus(t *testing.T) {
+	var calls []string
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		value := invocation.Args[1].Value
+		if invocation.Args[1].Kind == ArgumentUnresolved {
+			value = "<unresolved>"
+		}
+		calls = append(calls, invocation.Args[0].Value+":"+value)
+		return commandResultForTest(command, nil, nil, 0), nil
+	})
+	source := `cd /missing
+status=$?
+:
+if (( status == 0 )); then
+  lark-cli success "$PWD"
+else
+  lark-cli failure "$PWD"
+fi`
+	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"success:<unresolved>", "failure:/"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls = %#v, want %#v", calls, want)
+	}
+}
+
 func TestSimulatorMaterializesMissingInputOnlySubstitution(t *testing.T) {
 	source := `value=outer
 if value=$(< /missing/file); then
@@ -47,7 +73,7 @@ func TestSimulatorRetainsCorrelatedStateAfterExitStatusIsOverwritten(t *testing.
 
 func TestSimulatorReadsMissingInputOnlySubstitutionAsConcreteEmpty(t *testing.T) {
 	var calls [][]string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		arguments := make([]string, 0, len(invocation.Args))
 		for _, argument := range invocation.Args {
 			if argument.Kind == ArgumentUnresolved {
@@ -57,7 +83,7 @@ func TestSimulatorReadsMissingInputOnlySubstitutionAsConcreteEmpty(t *testing.T)
 			arguments = append(arguments, argument.Value)
 		}
 		calls = append(calls, arguments)
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{
 		Source: `lark-cli "$(< /missing/file)" "$(true)"`,
@@ -112,9 +138,9 @@ func TestSimulatorKeepsInnerBranchesWhenCreatingOutputParents(t *testing.T) {
 
 func TestSimulatorPreservesSparseIndexedArrayMutations(t *testing.T) {
 	var calls [][]string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		calls = append(calls, argumentStrings(t, invocation))
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	source := `arithmetic=([2]=two)
 ((arithmetic[4]=4))
@@ -140,9 +166,9 @@ array=([2]=你好)
 dense=(zero one two)
 lark-cli "${value:1:1}" "${value: -2}" "${value:1:-1}" "${array[2]:1:1}" "${dense[@]:1:2}"`
 	var calls [][]string
-	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
 		calls = append(calls, argumentStrings(t, invocation))
-		return &CommandResult{}, nil
+		return commandResultForTest(command, nil, nil, 0), nil
 	})
 	if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source}); err != nil {
 		t.Fatal(err)

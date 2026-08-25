@@ -69,10 +69,9 @@ func main() {
 			if err := shell.State().SetVariable("LAST_COMMAND", invocation.Name); err != nil {
 				return nil, err
 			}
-			return &libcommand.CommandResult{
-				Stdout:   []byte("accepted\n"),
-				ExitCode: 0,
-			}, nil
+			return shell.Result(shell.Output().
+				Stdout(libcommand.Resolved([]byte("accepted\n"))).
+				Build()), nil
 		}).
 		Build()
 
@@ -404,6 +403,9 @@ builder.Command("evaluate", func(
 - `Redirects`，包含当前调用的重定向目标和操作符；虚拟文件目标为绝对路径，
   未知目标会设置 `Redirect.Unresolved`；
 - `CommandContext` 暴露的虚拟文件系统、输入、选项、查找、算术和嵌套执行操作。
+- `Output` 与 `Result` 用于一个命令结果；Output builder 默认创建已确定的空
+  stdout/stderr 和退出码 0；
+- `ForkState`、`NewResult` 与 `AddOutput` 用于同时存在多个“状态 + 输出”结果的命令。
 
 状态变更只作用于当前路径，采用 Copy-on-Write，并受逻辑物化预算检查。父状态快照
 不可修改，其保留状态也计入该预算。命令返回后不得继续持有 `CommandContext` 或
@@ -415,14 +417,21 @@ builder.Command("evaluate", func(
 
 | 返回值 | 含义 |
 | --- | --- |
-| 非 nil Result，nil Error | 应用 stdout、stderr、退出码、Action 或声明式操作。 |
-| `command.UnresolvedResult()`，nil Error | 输出流和退出状态均无法确定。 |
+| `command.Result(command.Output()...Build())`，nil Error | 将一个输出应用到当前 State。 |
+| 通过 `AddOutput` 填充的 Result，nil Error | 为每个 Output 及其显式绑定的 State 创建一条运行路径。 |
+| 包含 `Unresolved(...)` 的 Output | 保留代表值，同时将对应维度标记为无法确定。 |
 | nil Result，nil Error | 放弃处理本次调用，使用 unresolved-command 行为。 |
+| 空 Result，nil Error | 与 nil Result 相同，不会删除当前执行路径。 |
 | 非 nil Error | 中止模拟并透传错误。 |
 | `CommandStop` | 成功终止全部活动和待执行路径。 |
 
-Handler Panic 会被转换为模拟错误。回调返回后，Runtime 会检查 stdout 和 stderr
-是否超过预算；已经发生的外部副作用无法回滚。
+多结果命令应为每个可能结果各调用一次 `ForkState`，只修改这些子 State，然后通过
+`result.AddOutput(child, output)` 逐一添加。普通单结果命令直接修改当前 State 并调用
+`Result`，无需克隆。命令返回后不得再修改 Output。
+
+Handler Panic 会被转换为模拟错误。回调返回后，Runtime 会检查返回流和 Output
+State 是否超过预算，每增加一个 Output 也会消耗一个执行步骤；已经发生的外部
+副作用无法回滚。
 
 ### 内置风险分析
 
@@ -448,16 +457,21 @@ if errors.Is(err, analysis.ErrRiskDetected) {
 `/dev/tcp` 或 `/dev/udp` 端点的交互式 Shell，以及同时建立 Socket、接管进程流并
 启动 Shell 的高置信 Python 或 Perl Payload。`Curl` 会识别通过上传、Data、JSON
 或 Multipart Form 选项读取本地文件或 stdin 的上传；普通请求、下载和内联请求数据
-不会命中。普通文件写入、其他单独的网络客户端或网络重定向、本地解释器程序和
-本地 Shell 管道不会被归类为风险。命中时返回
+不会命中。普通文件写入、其他单独的网络客户端或网络重定向和本地解释器程序
+不会被归类为风险。命中时返回
 `*analysis.DetectionError`，其 `Type` 为
 `reverse_shell`、`destructive_operation`、`sensitive_information_disclosure` 或
 `data_exfiltration`，并由 `Simulate` 原样向上游传递；无法确定或包含 unresolved
 数据时按安全处理，并保留 unresolved-command 行为。直接注册按照展开后的命令名
-精确匹配，如需检测 `/bin/rm`，调用方应另外注册该名字。需要启用完整检测集合的
-Middleware 可以调用 `analysis.Lookup(invocation.Name)`；它通过同一注册表解析可执行
-路径、`mkfs.*` 和带版本号的 Python 名称。嵌套 Shell 仍会通过正常分发递归检测：
-只注册 `analysis.RM`，也能检出 `base64 -d | sh` 解出的 `rm -rf /`。
+精确匹配，如需检测 `/bin/rm`，调用方应另外注册该名字。检测命令表和名称 Lookup
+策略由 Middleware 调用方持有，`analysis` 包不会全局启用任何命令。
+调用方通过 `analysis.WithSession` 将新建的 `analysis.NewSession` 绑定到每次模拟的
+Context 后，可以关联所选择的 `Mkfifo`、`Cat`、`Shell` 和 `NC` 检测器，识别
+`mkfifo f; cat f | bash -i | nc host port > f` 这一高置信
+FIFO 反弹 Shell；彼此独立的命令或显式替换 stdin 不会建立数据流。Middleware 必须
+对每次 Invocation 调用 `analysis.Inspect`，包括 Lookup 未命中的命令，以便无关命令
+切断待确认链路。嵌套 Shell 仍会通过正常分发递归检测：只注册 `analysis.RM`，也能
+检出 `base64 -d | sh` 解出的 `rm -rf /`。
 
 ## 资源模型
 

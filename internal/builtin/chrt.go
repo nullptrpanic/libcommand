@@ -17,7 +17,7 @@ func executeChrt(_ context.Context, shell *runtime.CommandContext, invocation *r
 	for index < len(invocation.Args) {
 		value, ok := wrapperArgument(invocation, index)
 		if !ok {
-			return unresolvedWrapper()
+			return unresolvedWrapper(shell)
 		}
 		if value == "--" {
 			index++
@@ -33,7 +33,7 @@ func executeChrt(_ context.Context, shell *runtime.CommandContext, invocation *r
 		}
 		if value == "-T" || value == "--sched-runtime" || value == "-P" || value == "--sched-period" || value == "-D" || value == "--sched-deadline" {
 			if _, ok := wrapperArgument(invocation, index+1); !ok {
-				return unresolvedWrapper()
+				return unresolvedWrapper(shell)
 			}
 			index += 2
 			continue
@@ -42,13 +42,13 @@ func executeChrt(_ context.Context, shell *runtime.CommandContext, invocation *r
 			index++
 			continue
 		}
-		return unresolvedWrapper()
+		return unresolvedWrapper(shell)
 	}
 	if pidMode {
 		return shell.StopUnresolved("chrt PID mode does not execute a nested command"), nil
 	}
 	if _, ok := wrapperArgument(invocation, index); !ok {
-		return unresolvedWrapper()
+		return unresolvedWrapper(shell)
 	}
 	return invokeExternalWrapper(shell, invocation, index+1, nil)
 }

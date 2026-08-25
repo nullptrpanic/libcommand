@@ -8,6 +8,6 @@ import (
 	"github.com/nullptrpanic/libcommand"
 )
 
-func executeJavaScriptCommand(string, *libcommand.Invocation) (*libcommand.CommandResult, error) {
+func executeJavaScriptCommand(*libcommand.CommandContext, string, *libcommand.Invocation) (*libcommand.CommandResult, error) {
 	return nil, errors.New("JavaScript command handlers require the browser Playground")
 }

@@ -19,13 +19,13 @@ func executeLet(_ context.Context, shell *runtime.CommandContext, invocation *ru
 	} else {
 		args, concrete := concreteArguments(invocation)
 		if !concrete {
-			return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+			return unresolvedStderrCommandResult(shell, 1), nil
 		}
 		expressions = make([]syntax.ArithmExpr, 0, len(args))
 		for _, argument := range args {
 			expression, err := shell.ParseArithmetic(argument)
 			if err != nil {
-				return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("let: %v\n", err)), ExitCode: 1}, nil
+				return commandResult(shell, nil, []byte(fmt.Sprintf("let: %v\n", err)), 1), nil
 			}
 			expressions = append(expressions, expression)
 		}
@@ -44,10 +44,10 @@ func executeLetExpressions(shell *runtime.CommandContext, expressions []syntax.A
 		}
 		if result.Unknown {
 			shell.Restore(snapshot)
-			return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+			return unresolvedStderrCommandResult(shell, 1), nil
 		}
 		if result.Failure != "" {
-			return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("let: %s\n", result.Failure)), ExitCode: 1}, nil
+			return commandResult(shell, nil, []byte(fmt.Sprintf("let: %s\n", result.Failure)), 1), nil
 		}
 		value = result.Value
 	}
@@ -55,5 +55,5 @@ func executeLetExpressions(shell *runtime.CommandContext, expressions []syntax.A
 	if value != 0 {
 		exitCode = 0
 	}
-	return &runtime.CommandResult{ExitCode: exitCode}, nil
+	return commandResult(shell, nil, nil, exitCode), nil
 }

@@ -17,7 +17,7 @@ func init() {
 func executeCD(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	for len(args) > 0 {
 		switch args[0] {
@@ -28,7 +28,7 @@ func executeCD(_ context.Context, shell *runtime.CommandContext, invocation *run
 			goto optionsDone
 		default:
 			if strings.HasPrefix(args[0], "-") && args[0] != "-" {
-				return &runtime.CommandResult{Stderr: []byte("cd: invalid option\n"), ExitCode: 2}, nil
+				return commandResult(shell, nil, []byte("cd: invalid option\n"), 2), nil
 			}
 			goto optionsDone
 		}
@@ -36,7 +36,7 @@ func executeCD(_ context.Context, shell *runtime.CommandContext, invocation *run
 
 optionsDone:
 	if len(args) > 1 {
-		return &runtime.CommandResult{Stderr: []byte("cd: too many arguments\n"), ExitCode: 1}, nil
+		return commandResult(shell, nil, []byte("cd: too many arguments\n"), 1), nil
 	}
 	target := ""
 	printDirectory := false
@@ -48,7 +48,7 @@ optionsDone:
 		}
 		target = home.String()
 	} else {
-		return &runtime.CommandResult{Stderr: []byte("cd: HOME not set\n"), ExitCode: 1}, nil
+		return commandResult(shell, nil, []byte("cd: HOME not set\n"), 1), nil
 	}
 	if target == "-" {
 		if shell.VariableUnknown("OLDPWD") {
@@ -56,7 +56,7 @@ optionsDone:
 		}
 		oldPWD := shell.Variable("OLDPWD")
 		if !oldPWD.IsSet() {
-			return &runtime.CommandResult{Stderr: []byte("cd: OLDPWD not set\n"), ExitCode: 1}, nil
+			return commandResult(shell, nil, []byte("cd: OLDPWD not set\n"), 1), nil
 		}
 		target = oldPWD.String()
 		printDirectory = true
@@ -81,24 +81,38 @@ optionsDone:
 		message := "No such file or directory"
 		if kind != runtime.PathMissing {
 			message = "Not a directory"
-		} else if cdPathUnknown || shell.CandidateContext() {
-			failure := shell.SnapshotForUnknownFailure()
-			if err := shell.EnsureDirectory(resolved); err == nil {
-				shell.SetDirectory(resolved, true)
-				stderr := updateDirectoryVariables(shell, oldDirectory, resolved, true, true)
-				shell.SetUnknownExitWithFailure(failure)
-				return shell.ResultCurrentExit(&runtime.CommandResult{Stderr: stderr}, false, false), nil
+		} else {
+			success := shell.ForkState()
+			failure := shell.ForkState()
+			if err := success.EnsureDirectory(resolved); err == nil {
+				if err := success.SetDirectory(resolved, true); err != nil {
+					return nil, err
+				}
+				stderr := updateDirectoryVariables(success.AssignVariable, oldDirectory, resolved, true, true)
+				successOutput := shell.Output().Stderr(runtime.Resolved(stderr))
+				if printDirectory {
+					successOutput.Stdout(uncertainValue([]byte(resolved+"\n"), resolvedUnknown))
+				}
+				result := shell.NewResult()
+				result.AddOutput(success, successOutput.Build())
+				result.AddOutput(failure, shell.Output().
+					Stderr(runtime.Resolved([]byte(fmt.Sprintf("cd: %s: %s\n", target, message)))).
+					ExitCode(runtime.Resolved(1)).
+					Build())
+				return result, nil
 			}
 			message = "Not a directory"
 		}
-		return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("cd: %s: %s\n", target, message)), ExitCode: 1}, nil
+		return commandResult(shell, nil, []byte(fmt.Sprintf("cd: %s: %s\n", target, message)), 1), nil
 	}
-	shell.SetDirectory(resolved, resolvedUnknown)
-	stderr := updateDirectoryVariables(shell, oldDirectory, resolved, oldUnknown, resolvedUnknown)
+	if err := shell.SetDirectory(resolved, resolvedUnknown); err != nil {
+		return nil, err
+	}
+	stderr := updateDirectoryVariables(shell.AssignVariable, oldDirectory, resolved, oldUnknown, resolvedUnknown)
 	if printDirectory {
-		return &runtime.CommandResult{Stdout: []byte(resolved + "\n"), Stderr: stderr}, nil
+		return commandResult(shell, []byte(resolved+"\n"), stderr, 0), nil
 	}
-	return &runtime.CommandResult{Stderr: stderr}, nil
+	return commandResult(shell, nil, stderr, 0), nil
 }
 
 func cdPathApplies(target string) bool {
@@ -127,11 +141,11 @@ func resolveCDPath(shell *runtime.CommandContext, target string) (string, bool, 
 	return "", false, false
 }
 
-func updateDirectoryVariables(shell *runtime.CommandContext, oldDirectory, resolved string, oldUnknown, resolvedUnknown bool) []byte {
+func updateDirectoryVariables(assignVariable func(string, *expand.Variable, bool) error, oldDirectory, resolved string, oldUnknown, resolvedUnknown bool) []byte {
 	var stderr []byte
 	assign := func(name, value string, unknown bool) {
 		variable := &expand.Variable{Set: true, Exported: true, Kind: expand.String, Str: value}
-		if err := shell.AssignVariable(name, variable, unknown); err != nil {
+		if err := assignVariable(name, variable, unknown); err != nil {
 			stderr = append(stderr, fmt.Sprintf("cd: %v\n", err)...)
 		}
 	}

@@ -18,7 +18,7 @@ type javascriptCommandResponse struct {
 	Error    string `json:"error"`
 }
 
-func executeJavaScriptCommand(registrationName string, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
+func executeJavaScriptCommand(command *libcommand.CommandContext, registrationName string, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
 	encodedInvocation, err := json.Marshal(invocation)
 	if err != nil {
 		return nil, fmt.Errorf("encode JavaScript command invocation: %w", err)
@@ -37,9 +37,5 @@ func executeJavaScriptCommand(registrationName string, invocation *libcommand.In
 	if response.ExitCode < 0 || response.ExitCode > 255 {
 		return nil, fmt.Errorf("JavaScript command exit code must be between 0 and 255")
 	}
-	return &libcommand.CommandResult{
-		Stdout:   []byte(response.Stdout),
-		Stderr:   []byte(response.Stderr),
-		ExitCode: response.ExitCode,
-	}, nil
+	return fixedCommandResult(command, response.Stdout, response.Stderr, response.ExitCode), nil
 }

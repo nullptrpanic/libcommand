@@ -15,13 +15,13 @@ import (
 // Command compatibility itself is tested by the builtin and public packages.
 
 func runtimeTestSuccessCommand(_ context.Context, execution *CommandContext, _ *Invocation) (*CommandResult, error) {
-	return &CommandResult{}, nil
+	return resultForTest(execution.State(), nil, nil, 0), nil
 }
 
 func runtimeTestDeclarationCommand(_ context.Context, execution *CommandContext, invocation *Invocation) (*CommandResult, error) {
 	declaration, ok := execution.CommandSyntax().(*syntax.DeclClause)
 	if !ok {
-		return &CommandResult{}, nil
+		return resultForTest(execution.State(), nil, nil, 0), nil
 	}
 	kind := expand.Unknown
 	exported := invocation.Name == "export"
@@ -69,7 +69,7 @@ func runtimeTestDeclarationCommand(_ context.Context, execution *CommandContext,
 	}
 	if local {
 		if len(s.localScopes) == 0 {
-			return &CommandResult{ExitCode: 1}, nil
+			return resultForTest(s, nil, nil, 1), nil
 		}
 		for _, assignment := range assignments {
 			if assignment.Name != nil && s.vars.Get(assignment.Name.Value).ReadOnly {
@@ -102,13 +102,13 @@ func runtimeTestDeclarationCommand(_ context.Context, execution *CommandContext,
 		value.ReadOnly = value.ReadOnly || readOnly
 		s.vars.putIndexedWithCertainty(name, value, s.vars.isUnknown(name), s.vars.indexedSlots(name))
 	}
-	return &CommandResult{}, nil
+	return resultForTest(s, nil, nil, 0), nil
 }
 
 func runtimeTestLetCommand(_ context.Context, execution *CommandContext, _ *Invocation) (*CommandResult, error) {
 	clause, ok := execution.CommandSyntax().(*syntax.LetClause)
 	if !ok {
-		return &CommandResult{}, nil
+		return resultForTest(execution.State(), nil, nil, 0), nil
 	}
 	snapshot := execution.Snapshot()
 	value := 0
@@ -120,14 +120,14 @@ func runtimeTestLetCommand(_ context.Context, execution *CommandContext, _ *Invo
 		}
 		if result.Unknown {
 			execution.Restore(snapshot)
-			return execution.ResultUnknown(&CommandResult{ExitCode: 1}, false, true, false), nil
+			return uncertainResultForTest(execution.State(), nil, nil, 1, false, false, true), nil
 		}
 		if result.Failure != "" {
-			return &CommandResult{Stderr: []byte("let: " + result.Failure + "\n"), ExitCode: 1}, nil
+			return resultForTest(execution.State(), nil, []byte("let: "+result.Failure+"\n"), 1), nil
 		}
 		value = result.Value
 	}
-	return &CommandResult{ExitCode: boolExitCode(value != 0)}, nil
+	return resultForTest(execution.State(), nil, nil, boolExitCode(value != 0)), nil
 }
 
 func runtimeTestConcreteArguments(invocation *Invocation) ([]string, bool) {
@@ -170,33 +170,33 @@ func runtimeTestSetCommand(_ context.Context, execution *CommandContext, invocat
 		}
 		args = args[1:]
 	}
-	return &CommandResult{}, nil
+	return resultForTest(s, nil, nil, 0), nil
 }
 
 func runtimeTestShiftCommand(_ context.Context, execution *CommandContext, invocation *Invocation) (*CommandResult, error) {
 	args, concrete := runtimeTestConcreteArguments(invocation)
 	if !concrete || len(args) > 1 {
-		return &CommandResult{ExitCode: 1}, nil
+		return resultForTest(execution.State(), nil, nil, 1), nil
 	}
 	amount := 1
 	if len(args) == 1 {
 		var err error
 		amount, err = strconv.Atoi(args[0])
 		if err != nil || amount < 0 {
-			return &CommandResult{ExitCode: 2}, nil
+			return resultForTest(execution.State(), nil, nil, 2), nil
 		}
 	}
 	positional := execution.PositionalArguments()
 	if amount > len(positional) {
-		return &CommandResult{ExitCode: 1}, nil
+		return resultForTest(execution.State(), nil, nil, 1), nil
 	}
 	execution.ReplacePositionalArguments(positional[amount:])
-	return &CommandResult{}, nil
+	return resultForTest(execution.State(), nil, nil, 0), nil
 }
 
 func runtimeTestPWDCommand(_ context.Context, execution *CommandContext, _ *Invocation) (*CommandResult, error) {
 	directory, unknown := execution.Directory()
-	return execution.ResultUnknown(&CommandResult{Stdout: []byte(directory + "\n")}, unknown, false, false), nil
+	return uncertainResultForTest(execution.State(), []byte(directory+"\n"), nil, 0, unknown, false, false), nil
 }
 
 func runtimeTestPrintfCommand(_ context.Context, execution *CommandContext, invocation *Invocation) (*CommandResult, error) {
@@ -210,20 +210,20 @@ func runtimeTestPrintfCommand(_ context.Context, execution *CommandContext, invo
 		args = args[2:]
 	}
 	if len(args) == 0 {
-		return &CommandResult{ExitCode: 2}, nil
+		return resultForTest(execution.State(), nil, nil, 2), nil
 	}
 	value, err := execution.Format(args[0], args[1:])
 	if err != nil {
-		return &CommandResult{ExitCode: 1}, nil
+		return resultForTest(execution.State(), nil, nil, 1), nil
 	}
 	if variable == "" {
-		return &CommandResult{Stdout: []byte(value)}, nil
+		return resultForTest(execution.State(), []byte(value), nil, 0), nil
 	}
 	execution.RecordVariableRollback(variable)
 	if err := execution.AssignVariable(variable, &expand.Variable{Set: true, Kind: expand.String, Str: value}, false); err != nil {
 		return nil, err
 	}
-	return &CommandResult{}, nil
+	return resultForTest(execution.State(), nil, nil, 0), nil
 }
 
 func runtimeTestReadCommand(_ context.Context, execution *CommandContext, invocation *Invocation) (*CommandResult, error) {
@@ -233,7 +233,7 @@ func runtimeTestReadCommand(_ context.Context, execution *CommandContext, invoca
 	}
 	for len(args) != 0 && strings.HasPrefix(args[0], "-") {
 		if args[0] != "-r" {
-			return &CommandResult{ExitCode: 2}, nil
+			return resultForTest(execution.State(), nil, nil, 2), nil
 		}
 		args = args[1:]
 	}
@@ -269,7 +269,7 @@ func runtimeTestReadCommand(_ context.Context, execution *CommandContext, invoca
 	if !terminated && line == "" {
 		exitCode = 1
 	}
-	return execution.ResultUnknown(&CommandResult{ExitCode: exitCode}, false, false, inputUnresolved), nil
+	return uncertainResultForTest(execution.State(), nil, nil, exitCode, false, false, inputUnresolved), nil
 }
 
 func runtimeTestUnsetCommand(_ context.Context, execution *CommandContext, invocation *Invocation) (*CommandResult, error) {
@@ -284,16 +284,16 @@ func runtimeTestUnsetCommand(_ context.Context, execution *CommandContext, invoc
 	} else if len(args) != 0 && args[0] == "-v" {
 		args = args[1:]
 	} else if len(args) != 0 && strings.HasPrefix(args[0], "-") {
-		return &CommandResult{ExitCode: 2}, nil
+		return resultForTest(execution.State(), nil, nil, 2), nil
 	}
 	for _, name := range args {
 		if functions {
 			execution.DeleteFunction(name)
 		} else if err := execution.UnsetVariable(name); err != nil {
-			return &CommandResult{ExitCode: 1}, nil
+			return resultForTest(execution.State(), nil, nil, 1), nil
 		}
 	}
-	return &CommandResult{}, nil
+	return resultForTest(execution.State(), nil, nil, 0), nil
 }
 
 func runtimeTestTestCommand(_ context.Context, execution *CommandContext, invocation *Invocation) (*CommandResult, error) {
@@ -303,18 +303,18 @@ func runtimeTestTestCommand(_ context.Context, execution *CommandContext, invoca
 	}
 	if invocation.Name == "[" {
 		if len(args) == 0 || args[len(args)-1] != "]" {
-			return &CommandResult{ExitCode: 2}, nil
+			return resultForTest(execution.State(), nil, nil, 2), nil
 		}
 		args = args[:len(args)-1]
 	}
 	truth, known, failure := runtimeTestTruth(execution, args)
 	if failure != 0 {
-		return &CommandResult{ExitCode: failure}, nil
+		return resultForTest(execution.State(), nil, nil, failure), nil
 	}
 	if !known {
 		return nil, nil
 	}
-	return &CommandResult{ExitCode: boolExitCode(truth)}, nil
+	return resultForTest(execution.State(), nil, nil, boolExitCode(truth)), nil
 }
 
 func runtimeTestTruth(execution *CommandContext, args []string) (bool, bool, int) {

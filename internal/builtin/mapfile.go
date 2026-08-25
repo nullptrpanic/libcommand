@@ -21,7 +21,7 @@ func executeMapfile(ctx context.Context, shell *runtime.CommandContext, invocati
 	}
 	args, concrete := concreteArguments(invocation)
 	if !concrete {
-		return shell.ResultUnknown(&runtime.CommandResult{ExitCode: 1}, false, true, false), nil
+		return unresolvedStderrCommandResult(shell, 1), nil
 	}
 	name := invocation.Name
 	originalInput, originalUnresolved := shell.Input()
@@ -48,11 +48,11 @@ func executeMapfile(ctx context.Context, shell *runtime.CommandContext, invocati
 		case "-n", "-O", "-s":
 			index++
 			if index >= len(args) {
-				return &runtime.CommandResult{Stderr: []byte(name + ": option requires an argument\n"), ExitCode: 2}, nil
+				return commandResult(shell, nil, []byte(name+": option requires an argument\n"), 2), nil
 			}
 			value, valid := parseNonNegative(args[index])
 			if !valid {
-				return &runtime.CommandResult{Stderr: []byte(name + ": invalid numeric argument\n"), ExitCode: 2}, nil
+				return commandResult(shell, nil, []byte(name+": invalid numeric argument\n"), 2), nil
 			}
 			switch args[index-1] {
 			case "-n":
@@ -66,7 +66,7 @@ func executeMapfile(ctx context.Context, shell *runtime.CommandContext, invocati
 		case "-d":
 			index++
 			if index >= len(args) {
-				return &runtime.CommandResult{Stderr: []byte(name + ": option requires an argument\n"), ExitCode: 2}, nil
+				return commandResult(shell, nil, []byte(name+": option requires an argument\n"), 2), nil
 			}
 			if args[index] == "" {
 				delimiter = 0
@@ -75,16 +75,16 @@ func executeMapfile(ctx context.Context, shell *runtime.CommandContext, invocati
 			}
 		default:
 			if strings.HasPrefix(args[index], "-") {
-				return &runtime.CommandResult{Stderr: []byte(name + ": invalid option\n"), ExitCode: 2}, nil
+				return commandResult(shell, nil, []byte(name+": invalid option\n"), 2), nil
 			}
 			arrayName = args[index]
 		}
 	}
 	if !syntax.ValidName(arrayName) {
-		return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("%s: `%s': not a valid identifier\n", name, arrayName)), ExitCode: 1}, nil
+		return commandResult(shell, nil, []byte(fmt.Sprintf("%s: `%s': not a valid identifier\n", name, arrayName)), 1), nil
 	}
 	if shell.Variable(arrayName).ReadOnly {
-		return &runtime.CommandResult{Stderr: []byte(fmt.Sprintf("%s: %s: readonly variable\n", name, arrayName)), ExitCode: 1}, nil
+		return commandResult(shell, nil, []byte(fmt.Sprintf("%s: %s: readonly variable\n", name, arrayName)), 1), nil
 	}
 	_, inputUnknown := shell.Input()
 	if inputUnknown {
@@ -92,7 +92,7 @@ func executeMapfile(ctx context.Context, shell *runtime.CommandContext, invocati
 			return restoreFailure(err)
 		}
 		shell.SetInput(nil, false)
-		return shell.ResultUnknown(&runtime.CommandResult{}, false, false, true), nil
+		return unresolvedExitCommandResult(shell, 0), nil
 	}
 	for range skip {
 		if err := ctx.Err(); err != nil {
@@ -158,5 +158,5 @@ func executeMapfile(ctx context.Context, shell *runtime.CommandContext, invocati
 	if err := shell.AssignIndexedVariable(arrayName, value, false, indexedSlots); err != nil {
 		return restoreFailure(err)
 	}
-	return &runtime.CommandResult{}, nil
+	return commandResult(shell, nil, nil, 0), nil
 }
