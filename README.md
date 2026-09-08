@@ -738,8 +738,12 @@ environment:
 ./verify.sh
 ```
 
-The gate runs formatting checks, tests, `go vet`, race detection, and the
-repository-wide coverage check. An individual fuzz target can be run with:
+The gate verifies an exported candidate checkout containing tracked files and
+non-ignored new files. Ignored local tools and build artifacts are not inputs
+to the gate. It runs formatting checks, all Go package tests, `go vet`, race
+detection, the **80.0%** whole-module coverage gate, Playground JavaScript tests,
+and the WebAssembly build. No production package is excluded from coverage.
+An individual fuzz target can be run with:
 
 ```bash
 go test -run '^$' -fuzz '^FuzzSimulatorSourceStability$' -fuzztime=10s .

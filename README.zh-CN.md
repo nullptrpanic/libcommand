@@ -667,8 +667,10 @@ make all
 ./verify.sh
 ```
 
-门禁包括格式检查、测试、`go vet`、Race Detection 和全仓覆盖率检查。单独运行
-一个 Fuzz Target 的示例：
+门禁会导出包含已跟踪文件和未被忽略的新文件的候选工作树，不将本地忽略的工具和
+构建产物作为输入。检查包括格式、所有 Go 包测试、`go vet`、Race Detection、
+**80.0%** 全模块覆盖率、Playground JavaScript 测试和 WebAssembly 构建；不会为了
+覆盖率而排除生产包。单独运行一个 Fuzz Target 的示例：
 
 ```bash
 go test -run '^$' -fuzz '^FuzzSimulatorSourceStability$' -fuzztime=10s .
