@@ -2,7 +2,6 @@ package analysis
 
 import (
 	"context"
-	"path"
 	"strings"
 
 	"github.com/nullptrpanic/libcommand"
@@ -59,16 +58,9 @@ func removesRoot(targets []string, directory string, directoryUnknown bool) bool
 		if !known {
 			continue
 		}
-		if resolved == "/" || rootGlob(resolved) {
+		if resolved == "/" {
 			return true
 		}
 	}
 	return false
-}
-
-func rootGlob(target string) bool {
-	if path.Dir(target) != "/" {
-		return false
-	}
-	return strings.ContainsAny(path.Base(target), "*?[")
 }

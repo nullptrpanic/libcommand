@@ -17,10 +17,10 @@ func perlReverseShellRisk(arguments []string) bool {
 	if !found {
 		return false
 	}
-	lower := strings.ToLower(payload)
+	lower := executableInterpreterText(payload)
 	createsSocket := strings.Contains(lower, "use socket") && strings.Contains(lower, "socket(")
 	connectsSocket := strings.Contains(lower, "connect(")
 	redirectsStreams := strings.Contains(lower, "open(stdin,") && strings.Contains(lower, "open(stdout,") && strings.Contains(lower, "open(stderr,")
-	launchesShell := strings.Contains(lower, "exec(") && containsShellExecutable(lower)
+	launchesShell := interpreterCallsShell(payload, lower, "exec(")
 	return createsSocket && connectsSocket && redirectsStreams && launchesShell
 }

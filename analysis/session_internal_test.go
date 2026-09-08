@@ -173,11 +173,11 @@ func TestInterpreterAndFindArgumentHelpers(t *testing.T) {
 		t.Fatal("shell executable classification mismatch")
 	}
 
-	paths := findSearchPaths([]string{"-D", "debug", "-H", "-O2", "/one", "/two", "-name", "value"})
+	paths, _ := findSearchPaths([]string{"-D", "debug", "-H", "-O2", "/one", "/two", "-name", "value"})
 	if strings.Join(paths, ",") != "/one,/two" {
 		t.Fatalf("find search paths = %#v", paths)
 	}
-	if paths := findSearchPaths([]string{"--", "relative", "!", "-name", "value"}); strings.Join(paths, ",") != "relative" {
+	if paths, _ := findSearchPaths([]string{"--", "relative", "!", "-name", "value"}); strings.Join(paths, ",") != "relative" {
 		t.Fatalf("find expression paths = %#v", paths)
 	}
 }

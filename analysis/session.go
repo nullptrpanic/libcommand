@@ -245,15 +245,10 @@ func unresolvedPipelineInput(invocation *libcommand.Invocation, redirects []*lib
 }
 
 func redirectsStdoutTo(redirects []*libcommand.Redirect, target string) bool {
-	for _, redirect := range redirects {
-		if redirect.FD != 1 || redirect.Unresolved {
-			continue
-		}
+	if redirect := redirectedFiles(redirects)[1]; redirect != nil {
 		switch redirect.Operator {
-		case ">", ">|", ">>":
-			if path.Clean(redirect.Target) == target {
-				return true
-			}
+		case ">", ">|", ">>", "&>", "&>>", ">&", "<>":
+			return path.Clean(redirect.Target) == target
 		}
 	}
 	return false

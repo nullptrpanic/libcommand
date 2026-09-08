@@ -13,59 +13,63 @@ func Curl(ctx context.Context, shell *libcommand.CommandContext, invocation *lib
 }
 
 func curlUploadsLocalInput(arguments []string) bool {
-	for index, argument := range arguments {
-		switch {
-		case argument == "-T" || argument == "--upload-file":
-			if index+1 < len(arguments) && arguments[index+1] != "" {
-				return true
+	risky := false
+	for index := 0; index < len(arguments); index++ {
+		argument := arguments[index]
+		if argument == "--" {
+			break
+		}
+		if !strings.HasPrefix(argument, "-") || argument == "-" {
+			continue
+		}
+		// Long options consume one value; clustered short options stop at the
+		// first value-taking option. A value must never be scanned as an option.
+		for offset := 1; offset < len(argument); offset++ {
+			option, value, attached := "-"+argument[offset:offset+1], "", false
+			if strings.HasPrefix(argument, "--") {
+				option, value, attached = strings.Cut(argument, "=")
+			} else if offset+1 < len(argument) {
+				value, attached = argument[offset+1:], true
 			}
-		case strings.HasPrefix(argument, "--upload-file="):
-			if strings.TrimPrefix(argument, "--upload-file=") != "" {
-				return true
+			if option == "--help" || option == "--version" || option == "--manual" || option == "-h" || option == "-V" || option == "-M" {
+				return false
 			}
-		case strings.HasPrefix(argument, "-T") && len(argument) > len("-T"):
-			return true
-		case argument == "-d" || argument == "--data" || argument == "--data-ascii" || argument == "--data-binary" || argument == "--json":
-			if index+1 < len(arguments) && curlDataReadsFile(arguments[index+1]) {
-				return true
+			takesValue := true
+			switch option {
+			case "--silent", "--show-error", "--fail", "--fail-with-body", "--location", "--insecure", "--compressed", "--verbose", "--get", "--head", "--globoff", "--http1.1", "--http2", "--http3", "--ipv4", "--ipv6", "--no-progress-meter", "--next":
+				takesValue = false
+			default:
+				if len(option) == 2 && strings.ContainsRune("012346aBfGgIijkLlnNOpqRsSvZ#:JO", rune(option[1])) {
+					takesValue = false
+				}
 			}
-		case strings.HasPrefix(argument, "-d") && len(argument) > len("-d"):
-			if curlDataReadsFile(strings.TrimPrefix(argument, "-d")) {
-				return true
+			if !takesValue {
+				if strings.HasPrefix(argument, "--") {
+					break
+				}
+				continue
 			}
-		case curlLongOptionReadsFile(argument, "--data") ||
-			curlLongOptionReadsFile(argument, "--data-ascii") ||
-			curlLongOptionReadsFile(argument, "--data-binary") ||
-			curlLongOptionReadsFile(argument, "--json"):
-			return true
-		case argument == "-F" || argument == "--form":
-			if index+1 < len(arguments) && curlFormReadsFile(arguments[index+1]) {
-				return true
+			if !attached {
+				index++
+				if index == len(arguments) {
+					return false
+				}
+				value = arguments[index]
 			}
-		case strings.HasPrefix(argument, "-F") && len(argument) > len("-F"):
-			if curlFormReadsFile(strings.TrimPrefix(argument, "-F")) {
-				return true
+			switch option {
+			case "-T", "--upload-file":
+				risky = risky || value != ""
+			case "-d", "--data", "--data-ascii", "--data-binary", "--json":
+				risky = risky || curlDataReadsFile(value)
+			case "-F", "--form":
+				risky = risky || curlFormReadsFile(value)
+			case "--data-urlencode":
+				risky = risky || curlURLEncodedDataReadsFile(value)
 			}
-		case strings.HasPrefix(argument, "--form="):
-			if curlFormReadsFile(strings.TrimPrefix(argument, "--form=")) {
-				return true
-			}
-		case argument == "--data-urlencode":
-			if index+1 < len(arguments) && curlURLEncodedDataReadsFile(arguments[index+1]) {
-				return true
-			}
-		case strings.HasPrefix(argument, "--data-urlencode="):
-			if curlURLEncodedDataReadsFile(strings.TrimPrefix(argument, "--data-urlencode=")) {
-				return true
-			}
+			break
 		}
 	}
-	return false
-}
-
-func curlLongOptionReadsFile(argument, option string) bool {
-	prefix := option + "="
-	return strings.HasPrefix(argument, prefix) && curlDataReadsFile(strings.TrimPrefix(argument, prefix))
+	return risky
 }
 
 func curlDataReadsFile(value string) bool {

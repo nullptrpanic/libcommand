@@ -17,10 +17,10 @@ func pythonReverseShellRisk(arguments []string) bool {
 	if !found {
 		return false
 	}
-	lower := strings.ToLower(payload)
+	lower := executableInterpreterText(payload)
 	createsSocket := strings.Contains(lower, "socket.socket(") || strings.Contains(lower, "socket.create_connection(")
 	connectsSocket := strings.Contains(lower, ".connect(") || strings.Contains(lower, "create_connection(")
 	redirectsDescriptors := strings.Contains(lower, "dup2(")
-	launchesShell := strings.Contains(lower, "pty.spawn(") && containsShellExecutable(lower)
+	launchesShell := interpreterCallsShell(payload, lower, "pty.spawn(")
 	return createsSocket && connectsSocket && redirectsDescriptors && launchesShell
 }

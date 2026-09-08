@@ -8,5 +8,5 @@ import (
 
 // Halt detects system halt requests.
 func Halt(ctx context.Context, shell *libcommand.CommandContext, invocation *libcommand.Invocation) (*libcommand.CommandResult, error) {
-	return commandResult(ctx, shell, invocation, RiskTypeDestructiveOperation)
+	return argumentRiskResult(ctx, shell, invocation, powerRequest, RiskTypeDestructiveOperation)
 }

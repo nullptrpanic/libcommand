@@ -23,47 +23,49 @@ func Shell(ctx context.Context, shell *libcommand.CommandContext, invocation *li
 }
 
 func networkFeedsStdin(redirects []*libcommand.Redirect) bool {
-	networkFDs := make(map[int]bool)
+	input := redirectedFiles(redirects)[0]
+	if input == nil {
+		return false
+	}
+	target := path.Clean(input.Target)
+	return strings.HasPrefix(target, "/dev/tcp/") || strings.HasPrefix(target, "/dev/udp/")
+}
+
+// Resolve in source order: duplication captures the endpoint at that moment,
+// while reopening or closing a descriptor replaces its previous endpoint.
+func redirectedFiles(redirects []*libcommand.Redirect) map[int]*libcommand.Redirect {
+	files := make(map[int]*libcommand.Redirect)
 	for _, redirect := range redirects {
-		target := path.Clean(redirect.Target)
-		network := !redirect.Unresolved && (strings.HasPrefix(target, "/dev/tcp/") || strings.HasPrefix(target, "/dev/udp/"))
+		if redirect.Unresolved {
+			files[redirect.FD] = nil
+			if redirect.Operator == "&>" || redirect.Operator == "&>>" {
+				files[1], files[2] = nil, nil
+			}
+			continue
+		}
 		switch redirect.Operator {
 		case "&>", "&>>":
-			networkFDs[1] = network
-			networkFDs[2] = network
-		case ">&":
-			if network {
-				networkFDs[redirect.FD] = true
-				if redirect.FD == 1 {
-					networkFDs[2] = true
+			files[1], files[2] = redirect, redirect
+		case ">&", "<&":
+			targetFD, err := strconv.Atoi(strings.TrimSuffix(redirect.Target, "-"))
+			if err == nil && targetFD >= 0 {
+				files[redirect.FD] = files[targetFD]
+				if strings.HasSuffix(redirect.Target, "-") {
+					files[targetFD] = nil
 				}
-				continue
+			} else if strings.HasPrefix(redirect.Target, "/") {
+				files[redirect.FD] = redirect
+				if redirect.Operator == ">&" && redirect.FD == 1 {
+					files[2] = redirect
+				}
+			} else {
+				files[redirect.FD] = nil
 			}
-			targetFD, err := strconv.Atoi(redirect.Target)
-			if err == nil {
-				networkFDs[redirect.FD] = networkFDs[targetFD]
-				continue
-			}
-			networkFDs[redirect.FD] = false
-			if redirect.FD == 1 {
-				networkFDs[2] = false
-			}
-		case "<&":
-			if network {
-				networkFDs[redirect.FD] = true
-				continue
-			}
-			targetFD, err := strconv.Atoi(redirect.Target)
-			if err == nil {
-				networkFDs[redirect.FD] = networkFDs[targetFD]
-				continue
-			}
-			networkFDs[redirect.FD] = false
 		default:
-			networkFDs[redirect.FD] = network
+			files[redirect.FD] = redirect
 		}
 	}
-	return networkFDs[0]
+	return files
 }
 
 func interactiveShellReadsInput(arguments []string) bool {

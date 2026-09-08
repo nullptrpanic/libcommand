@@ -140,7 +140,7 @@ func TestDestructivePathHelperBoundaries(t *testing.T) {
 	if !findDeletesRoot([]string{"-delete"}, "/", false) {
 		t.Fatal("find with an implicit root search path was not destructive")
 	}
-	if paths := findSearchPaths(nil); len(paths) != 0 {
+	if paths, _ := findSearchPaths(nil); len(paths) != 0 {
 		t.Fatalf("empty find paths = %#v", paths)
 	}
 	if blockDevicePath("relative", "/work", true) {

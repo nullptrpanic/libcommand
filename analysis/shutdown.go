@@ -12,7 +12,7 @@ func Shutdown(ctx context.Context, shell *libcommand.CommandContext, invocation 
 }
 
 func shutdownRequest(arguments []string) bool {
-	return !shutdownCancellation(arguments)
+	return powerRequest(arguments) && !shutdownCancellation(arguments)
 }
 
 func shutdownCancellation(arguments []string) bool {
