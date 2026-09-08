@@ -810,16 +810,22 @@ name=source; command "$name" virtual.sh`
 
 func TestSimulatorDoesNotTreatFunctionNamedTestAsBuiltin(t *testing.T) {
 	callbacks := 0
-	simulator := mustBuildSimulator(t, "lark-cli", countInvocations(&callbacks))
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, shell *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		callbacks++
+		if len(invocation.Args) != 1 || invocation.Args[0].Kind != ArgumentUnresolved {
+			t.Fatalf("function argument = %#v, want unresolved", invocation.Args)
+		}
+		return commandResultForTest(shell, nil, nil, 0), nil
+	})
 
 	err := simulator.Simulate(context.Background(), &SimulationRequest{
 		Source: `test() { lark-cli "$1"; }; test "$RANDOM"`,
 	})
-	if err == nil || !strings.Contains(err.Error(), "host runtime state") {
+	if err != nil {
 		t.Fatalf("Simulate() error = %v", err)
 	}
-	if callbacks != 0 {
-		t.Fatalf("callbacks = %d, want 0", callbacks)
+	if callbacks != 1 {
+		t.Fatalf("callbacks = %d, want 1", callbacks)
 	}
 }
 

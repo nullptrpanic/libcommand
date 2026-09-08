@@ -9,19 +9,26 @@ import (
 // CommandContext provides Shell execution capabilities for one command call.
 // It and the State returned by State must not be retained after the call.
 type CommandContext struct {
-	execution    *ExecutionContext
-	state        *State
-	source       *location
-	syntax       syntax.Command
-	redirects    []*Redirect
-	originalUser string
-	userChanged  bool
+	execution        *ExecutionContext
+	state            *State
+	source           *location
+	syntax           syntax.Command
+	argv0            string
+	redirects        []*Redirect
+	originalUser     string
+	userChanged      bool
+	redirectionScope *redirectionPlan
+	expansions       *commandExpansions
 }
 
 // State returns the current execution-path state.
 func (c *CommandContext) State() *State {
 	return c.state
 }
+
+// Argv0 is the process argument zero, normally Invocation.Name. A replacement
+// may override it without changing the command used for registry lookup.
+func (c *CommandContext) Argv0() string { return c.argv0 }
 
 // ChangeUser changes the simulated user for the remainder of this command,
 // including nested command operations. The runtime restores the previous user
@@ -76,6 +83,15 @@ func (c *CommandContext) CommandSyntax() syntax.Command {
 // The returned values must be treated as read-only and not retained.
 func (c *CommandContext) Redirects() []*Redirect {
 	return c.redirects
+}
+
+// PersistRedirections retains this command's descriptor bindings after it
+// returns. Enclosing compound-statement redirections still have their own
+// scope. No host file descriptor is opened or changed.
+func (c *CommandContext) PersistRedirections() {
+	if c.redirectionScope != nil {
+		c.state.keptRedirections = c.redirectionScope
+	}
 }
 
 // Output returns a builder initialized with resolved empty streams and exit
@@ -181,6 +197,13 @@ func (c *CommandContext) Replace(name string, arguments []*Argument, clearEnviro
 	})
 }
 
+// WithArgv0 sets argument zero for a delayed Invoke or Replace operation.
+// It does not rename the registry target or alter the remaining arguments.
+func (r *CommandResult) WithArgv0(name string) *CommandResult {
+	r.operation.argv0 = &name
+	return r
+}
+
 // Evaluate evaluates source in the current Shell.
 func (c *CommandContext) Evaluate(source, name string, parseExitCode int) *CommandResult {
 	return operationResult(&commandOperation{
@@ -195,19 +218,28 @@ func (c *CommandContext) Evaluate(source, name string, parseExitCode int) *Comma
 // positional arguments.
 func (c *CommandContext) Source(source, name string, arguments []string) *CommandResult {
 	return operationResult(&commandOperation{
-		kind:            commandOperationSource,
-		source:          source,
-		name:            name,
-		sourceArguments: append([]string(nil), arguments...),
+		kind:      commandOperationSource,
+		source:    source,
+		name:      name,
+		arguments: concreteArguments(arguments),
 	})
 }
 
 // RunShell evaluates a child Shell program in an isolated Shell state.
 func (c *CommandContext) RunShell(program *ShellProgram) *CommandResult {
 	copied := *program
-	copied.Arguments = append([]string(nil), program.Arguments...)
+	// The delayed operation owns one typed argument list, not a second string
+	// copy that can diverge after WithArguments.
+	copied.Arguments = nil
 	copied.Options = maps.Clone(program.Options)
-	return operationResult(&commandOperation{kind: commandOperationRunShell, program: &copied})
+	return operationResult(&commandOperation{kind: commandOperationRunShell, program: &copied, arguments: concreteArguments(program.Arguments)})
+}
+
+// WithArguments replaces the positional arguments of a Source or RunShell
+// operation, preserving unknown values independently of the known script body.
+func (r *CommandResult) WithArguments(arguments []*Argument) *CommandResult {
+	r.operation.arguments = cloneArguments(arguments)
+	return r
 }
 
 func operationResult(operation *commandOperation) *CommandResult {

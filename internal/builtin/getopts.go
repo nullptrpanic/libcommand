@@ -18,14 +18,14 @@ func init() {
 }
 
 func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
-	args, concrete := concreteArguments(invocation)
-	if !concrete {
-		return unresolvedStderrCommandResult(shell, 1), nil
-	}
+	args := invocation.Args
 	if len(args) < 2 {
 		return commandResult(shell, nil, []byte("getopts: usage: getopts optstring name [arg ...]\n"), 2), nil
 	}
-	optionString, variableName := args[0], args[1]
+	if args[0].Kind == runtime.ArgumentUnresolved || args[1].Kind == runtime.ArgumentUnresolved {
+		return unresolvedStderrCommandResult(shell, 1), nil
+	}
+	optionString, variableName := args[0].Value, args[1].Value
 	finish := func(output *runtime.CommandOutput) *runtime.CommandResult {
 		if !syntax.ValidName(variableName) {
 			return commandResult(shell, nil, []byte(fmt.Sprintf("getopts: `%s': not a valid identifier\n", variableName)), 1)
@@ -42,7 +42,7 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 
 	positional := args[2:]
 	if len(positional) == 0 {
-		positional = shell.PositionalArguments()
+		positional = shell.TypedPositionalArguments()
 	}
 	optind, err := strconv.Atoi(shell.Variable("OPTIND").String())
 	if err != nil || optind < 1 {
@@ -66,7 +66,11 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 			unsetGetoptsValue(shell, "OPTARG")
 			return finish(commandOutput(nil, nil, 1)), nil
 		}
-		token := positional[state.index-1]
+		if positional[state.index-1].Kind == runtime.ArgumentUnresolved {
+			markGetoptsStateUnknown(shell, variableName)
+			return finish(uncertainCommandOutput(nil, nil, 0, false, true, true)), nil
+		}
+		token := positional[state.index-1].Value
 		if token == "--" {
 			state.index++
 			state.offset = 1
@@ -110,13 +114,15 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 		}
 
 		argument := ""
+		argumentUnknown := false
 		if state.offset < len(token) {
 			argument = token[state.offset:]
 			state.index++
 			state.offset = 1
 		} else if state.index < len(positional) {
 			state.index++
-			argument = positional[state.index-1]
+			argument = positional[state.index-1].Value
+			argumentUnknown = positional[state.index-1].Kind == runtime.ArgumentUnresolved
 			state.index++
 			state.offset = 1
 		} else {
@@ -134,7 +140,7 @@ func executeGetopts(_ context.Context, shell *runtime.CommandContext, invocation
 		}
 		setGetoptsIndex(shell, state)
 		setGetoptsValue(shell, variableName, string(option))
-		setGetoptsValue(shell, "OPTARG", argument)
+		_ = shell.AssignVariable("OPTARG", &expand.Variable{Set: true, Kind: expand.String, Str: argument}, argumentUnknown)
 		return finish(commandOutput(nil, nil, 0)), nil
 	}
 }

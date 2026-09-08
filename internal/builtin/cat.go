@@ -37,6 +37,8 @@ func executeCat(ctx context.Context, shell *runtime.CommandContext, invocation *
 
 	maximum := shell.MaxMemoryBytes()
 	stdout := make([]byte, 0)
+	var stderr []byte
+	exitCode := 0
 	stdoutUnknown := false
 	stderrUnknown := false
 	exitUnknown := false
@@ -58,10 +60,13 @@ func executeCat(ctx context.Context, shell *runtime.CommandContext, invocation *
 		} else {
 			name := shell.ResolvePath(operand)
 			if shell.PathKind(name) == runtime.PathDirectory {
-				if stdinConsumed {
-					shell.SetInput(nil, false)
+				diagnostic := fmt.Sprintf("cat: %s: Is a directory\n", operand)
+				if _, ok := materialize.Add(len(stdout)+len(stderr), len(diagnostic), maximum); !ok {
+					return nil, materialize.LimitError(maximum)
 				}
-				return uncertainCommandResult(shell, stdout, []byte(fmt.Sprintf("cat: %s: Is a directory\n", operand)), 1, stdoutUnknown, stderrUnknown, exitUnknown), nil
+				stderr = append(stderr, diagnostic...)
+				exitCode = 1
+				continue
 			}
 			var exists bool
 			contents, unknown, exists = shell.ReadFile(name)
@@ -73,7 +78,7 @@ func executeCat(ctx context.Context, shell *runtime.CommandContext, invocation *
 			}
 		}
 
-		if _, ok := materialize.Add(len(stdout), len(contents), maximum); !ok {
+		if _, ok := materialize.Add(len(stdout)+len(stderr), len(contents), maximum); !ok {
 			return nil, materialize.LimitError(maximum)
 		}
 		stdout = append(stdout, contents...)
@@ -83,5 +88,5 @@ func executeCat(ctx context.Context, shell *runtime.CommandContext, invocation *
 		shell.SetInput(nil, false)
 	}
 
-	return uncertainCommandResult(shell, stdout, nil, 0, stdoutUnknown, stderrUnknown, exitUnknown), nil
+	return uncertainCommandResult(shell, stdout, stderr, exitCode, stdoutUnknown, stderrUnknown, exitUnknown && exitCode == 0), nil
 }

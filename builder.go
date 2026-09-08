@@ -62,6 +62,7 @@ func (b *Builder) Build() *Simulator {
 			definition = &runtime.CommandDefinition{}
 		}
 		definition.Command = command
+		definition.Prepare = nil
 		definition.Candidate = name != "*"
 		definition.RestoreAssignments = false
 		definition.UserOverride = true
@@ -71,6 +72,7 @@ func (b *Builder) Build() *Simulator {
 	for _, definition := range commands {
 		if len(b.middlewares) != 0 {
 			definition.Candidate = true
+			definition.Observed = true
 		}
 		definition.Command = applyCommandMiddleware(definition.Command, b.middlewares)
 	}

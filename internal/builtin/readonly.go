@@ -1,5 +1,5 @@
 package builtin
 
 func init() {
-	registerCommand("readonly", executeDeclaration)
+	registerDeclaration("readonly")
 }

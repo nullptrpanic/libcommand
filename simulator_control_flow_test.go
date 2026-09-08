@@ -772,6 +772,64 @@ lark-cli end`,
 	}
 }
 
+func TestSimulatorPreservesCompoundControlTransfers(t *testing.T) {
+	tests := []*struct {
+		name     string
+		source   string
+		calls    []string
+		exitCode int
+	}{
+		{name: "return from logical left", source: `f(){ return 7 || lark-cli unreachable; }; f; lark-cli "$?"`, calls: []string{"7"}},
+		{name: "return from if condition", source: `f(){ if return 7; then lark-cli unreachable; fi; }; f; lark-cli "$?"`, calls: []string{"7"}},
+		{name: "negated return", source: `f(){ ! return 7; }; f; lark-cli "$?"`, calls: []string{"7"}},
+		{name: "exit from logical left", source: `exit 7 || lark-cli unreachable; lark-cli after`, exitCode: 7},
+		{name: "exit from if condition", source: `if exit 7; then lark-cli unreachable; fi; lark-cli after`, exitCode: 7},
+		{name: "negated exit", source: `! exit 7; lark-cli after`, exitCode: 7},
+		{name: "return from while condition", source: `f(){ while return 7; do lark-cli unreachable; done; }; f; lark-cli "$?"`, calls: []string{"7"}},
+		{name: "return from until condition", source: `f(){ until return 0; do lark-cli unreachable; done; }; f; lark-cli "$?"`, calls: []string{"0"}},
+		{name: "break from logical left", source: `for i in a b; do break && lark-cli unreachable; done; lark-cli after`, calls: []string{"after"}},
+		{name: "continue from logical left", source: `for i in a b; do continue && lark-cli unreachable; done; lark-cli after`, calls: []string{"after"}},
+		{name: "break from while condition", source: `while break; do lark-cli unreachable; done; lark-cli after`, calls: []string{"after"}},
+		{name: "continue from while condition", source: `i=0; while ((i+=1)); if ((i<3)); then continue; fi; ((i<4)); do lark-cli "$i"; done; lark-cli after`, calls: []string{"3", "after"}},
+		{name: "break outer loop from condition", source: `for i in a b; do while break 2; do lark-cli unreachable; done; lark-cli unreachable; done; lark-cli after`, calls: []string{"after"}},
+		{name: "continue outer loop from condition", source: `for i in a b; do lark-cli "$i"; while continue 2; do lark-cli unreachable; done; lark-cli unreachable; done; lark-cli after`, calls: []string{"a", "b", "after"}},
+		{name: "return stops case pattern evaluation", source: `f(){ case x in x) return 7 ;;& "$(lark-cli unreachable)") : ;; esac; }; f; lark-cli "$?"`, calls: []string{"7"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			for _, traced := range []bool{false, true} {
+				var calls []string
+				simulator := mustBuildSimulator(t, "lark-cli", recordFirstArgument(t, &calls))
+				request := &SimulationRequest{Source: test.source}
+				var err error
+				if traced {
+					var completed *TraceEvent
+					err = simulator.SimulateTrace(context.Background(), request, func(event *TraceEvent) bool {
+						if event.Kind == TracePathCompleted {
+							if completed != nil {
+								t.Fatal("known control transfer unexpectedly forked")
+							}
+							completed = event
+						}
+						return true
+					})
+					if completed == nil || completed.PathResult == nil || completed.PathResult.ExitCodeUnresolved || completed.PathResult.ExitCode != test.exitCode {
+						t.Fatalf("completion = %#v, want concrete exit %d", completed, test.exitCode)
+					}
+				} else {
+					err = simulator.Simulate(context.Background(), request)
+				}
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !reflect.DeepEqual(calls, test.calls) {
+					t.Fatalf("trace=%v: calls = %q, want %q", traced, calls, test.calls)
+				}
+			}
+		})
+	}
+}
+
 func TestSimulatorRejectsInvalidLoopControlWithoutStopping(t *testing.T) {
 	source := `break || lark-cli outer-break
 continue || lark-cli outer-continue
@@ -786,6 +844,61 @@ for value in one; do
   break
 done`
 	requireFirstArguments(t, source, []string{"outer-break", "outer-continue", "invalid-break", "after-break", "invalid-continue", "after-continue"})
+}
+
+func TestSimulatorRestoresLoopScopeAfterExpansionReplay(t *testing.T) {
+	tests := []*struct {
+		name   string
+		source string
+		calls  []string
+	}{
+		{name: "completed loop", source: `for i in $(echo a); do :; done; break; lark-cli after`, calls: []string{"after"}},
+		{name: "break with excess depth", source: `for i in $(echo a); do break 2; done; lark-cli after`, calls: []string{"after"}},
+		{name: "continue with excess depth", source: `for i in $(echo a); do continue 2; done; lark-cli after`, calls: []string{"after"}},
+		{name: "multiple substitutions", source: `for i in $(echo a) $(echo b); do lark-cli "$i"; done; continue; lark-cli after`, calls: []string{"a", "b", "after"}},
+		{name: "nested break", source: `for a in $(echo a); do for b in $(echo b); do break 2; done; lark-cli unreachable; done; lark-cli after`, calls: []string{"after"}},
+		{name: "nested continue", source: `for a in $(echo 'a b'); do for b in $(echo c); do lark-cli "$a"; continue 2; done; lark-cli unreachable; done; lark-cli after`, calls: []string{"a", "b", "after"}},
+		{name: "empty substituted items", source: `for i in $(true); do lark-cli unreachable; done; break; lark-cli after`, calls: []string{"after"}},
+		{name: "while condition substitution", source: `while [[ $(echo no) = yes ]]; do lark-cli unreachable; done; break; lark-cli after`, calls: []string{"after"}},
+		{name: "function body substitution", source: `f(){ for i in $(echo a); do return 7; done; }; f; lark-cli "$?"; break; lark-cli after`, calls: []string{"7", "after"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requireFirstArguments(t, test.source, test.calls)
+		})
+	}
+}
+
+func TestSimulatorPreservesFailureEffectScopes(t *testing.T) {
+	tests := []*struct {
+		name   string
+		source string
+		calls  []string
+	}{
+		{name: "errexit skipped and tail", source: `set -e; false && lark-cli unreachable; lark-cli after`, calls: []string{"after"}},
+		{name: "errexit negation", source: `set -e; ! true; lark-cli after`, calls: []string{"after"}},
+		{name: "errexit nested exempt block", source: `set -e; { false && lark-cli unreachable; }; lark-cli after`, calls: []string{"after"}},
+		{name: "errexit eligible and tail", source: `set -e; true && false; lark-cli unreachable`},
+		{name: "errexit eligible or tail", source: `set -e; false || false; lark-cli unreachable`},
+		{name: "errexit pipeline last block", source: `set -e; true | { false; lark-cli unreachable; }; lark-cli unreachable`},
+		{name: "errexit pipeline last function", source: `set -e; f(){ false; lark-cli unreachable; }; true | f; lark-cli unreachable`},
+		{name: "errexit nonlast pipeline block", source: `set -e; { false; lark-cli left; } | true; lark-cli after`, calls: []string{"left", "after"}},
+		{name: "pipeline inherits condition exemption", source: `set -e; if true | { false; lark-cli right; }; then lark-cli after; fi`, calls: []string{"right", "after"}},
+		{name: "new function result is eligible", source: `set -e; f(){ false && true; }; f; lark-cli unreachable`},
+		{name: "new eval result is eligible", source: `set -e; eval 'false && true'; lark-cli unreachable`},
+		{name: "err skipped and tail", source: `trap 'lark-cli err' ERR; false && lark-cli unreachable; lark-cli after`, calls: []string{"after"}},
+		{name: "err negation", source: `trap 'lark-cli err' ERR; ! true; lark-cli after`, calls: []string{"after"}},
+		{name: "err once for nested block", source: `trap 'lark-cli err' ERR; { { false; }; }; lark-cli after`, calls: []string{"err", "after"}},
+		{name: "err once for if branch", source: `trap 'lark-cli err' ERR; if true; then false; fi; lark-cli after`, calls: []string{"err", "after"}},
+		{name: "err at inherited function boundaries", source: `set -E; trap 'lark-cli err' ERR; f(){ false; }; f; lark-cli after`, calls: []string{"err", "err", "after"}},
+		{name: "new function result triggers err", source: `trap 'lark-cli err' ERR; f(){ false && true; }; f; lark-cli after`, calls: []string{"err", "after"}},
+		{name: "new eval result triggers err", source: `trap 'lark-cli err' ERR; eval 'false && true'; lark-cli after`, calls: []string{"err", "after"}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			requireFirstArguments(t, test.source, test.calls)
+		})
+	}
 }
 
 func TestSimulatorStopsScopesOnInvalidNumericExitAndReturn(t *testing.T) {

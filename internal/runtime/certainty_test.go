@@ -300,7 +300,7 @@ func TestUnknownDataConcreteBoundaries(t *testing.T) {
 		wantIssue bool
 	}{
 		{"command name", `value=$(unknown); $value argument`, StatusCompleted, false},
-		{"function argument", `forward() { registered "$1"; }; value=$(unknown); forward "$value"`, StatusUnresolved, true},
+		{"function argument", `forward() { registered "$1"; }; value=$(unknown); forward "$value"`, StatusCompleted, false},
 		{"redirection path", `value=$(unknown); echo data >"$value"`, StatusCompleted, false},
 	}
 	for _, test := range tests {

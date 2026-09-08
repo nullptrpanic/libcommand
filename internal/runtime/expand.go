@@ -122,6 +122,7 @@ type expandedFields struct {
 	fields      []string
 	arguments   []*Argument
 	hostUnknown bool
+	unknownList bool
 }
 
 func (e *ExecutionContext) expandFields(s *State, words []*syntax.Word, allowHostUnknown bool) (expansion *expandedFields, err error) {
@@ -139,10 +140,21 @@ func (e *ExecutionContext) expandFields(s *State, words []*syntax.Word, allowHos
 		if err := e.ctx.Err(); err != nil {
 			return nil, err
 		}
+		if positional, handled := quotedPositionalArguments(s, word); handled {
+			for _, argument := range positional {
+				materializedBytes, err = e.addMaterializedString(materializedBytes, argument.Value)
+				if err != nil {
+					return nil, err
+				}
+				expansion.fields = append(expansion.fields, argument.Value)
+			}
+			expansion.arguments = append(expansion.arguments, positional...)
+			continue
+		}
 		if err := normalizeWordArithmeticLiterals(word); err != nil {
 			return nil, err
 		}
-		if err := validateUnknownParameterExpansions(s, word); err != nil {
+		if err := validateParameterExpansions(s, word, false); err != nil {
 			return nil, err
 		}
 		if err := e.checkBraceExpansion(word, materializedBytes); err != nil {
@@ -172,9 +184,11 @@ func (e *ExecutionContext) expandFields(s *State, words []*syntax.Word, allowHos
 				return nil, fmt.Errorf("word depends on host runtime state")
 			}
 			expansion.hostUnknown = true
+			expansion.unknownList = true
 			expansion.fields = append(expansion.fields, "")
 			expansion.arguments = append(expansion.arguments, &Argument{Kind: ArgumentUnresolved})
 		} else if dataUnknown {
+			expansion.unknownList = true
 			expansion.fields = append(expansion.fields, expanded...)
 			expansion.arguments = append(expansion.arguments, &Argument{Kind: ArgumentUnresolved})
 		} else {
@@ -215,7 +229,11 @@ func (e *ExecutionContext) expandPreparedWordFields(
 	)
 }
 
-func (e *ExecutionContext) applyAssignments(s *State, assignments []*syntax.Assign, declaredKind expand.ValueKind, exported bool) (err error) {
+func (e *ExecutionContext) applyAssignments(s *State, assignments []*syntax.Assign, declaredKind expand.ValueKind, exported bool) error {
+	return e.applyPreparedAssignments(s, assignments, declaredKind, exported, nil)
+}
+
+func (e *ExecutionContext) applyPreparedAssignments(s *State, assignments []*syntax.Assign, declaredKind expand.ValueKind, exported bool, prepared *commandExpansions) (err error) {
 	originalVars := s.vars
 	s.vars = s.vars.clone()
 	defer func() {
@@ -228,6 +246,9 @@ func (e *ExecutionContext) applyAssignments(s *State, assignments []*syntax.Assi
 		return materialize.LimitError(normalizedMaxMemoryBytes(e.config.MaxMemoryBytes))
 	}
 	nonVariableBytes := stateBytes - s.vars.materializedBytes
+	if prepared != nil {
+		nonVariableBytes = addRetainedBytes(nonVariableBytes, prepared.bytes)
+	}
 	for index, assignment := range assignments {
 		if index%256 == 0 {
 			if err := e.ctx.Err(); err != nil {
@@ -258,7 +279,7 @@ func (e *ExecutionContext) applyAssignments(s *State, assignments []*syntax.Assi
 		if assignment.Array != nil && kind == expand.Unknown {
 			kind = expand.Indexed
 		}
-		value, indexedSlots, unknown, err := e.assignmentValue(s, assignment, kind)
+		value, indexedSlots, unknown, err := e.assignmentValue(s, assignment, kind, prepared)
 		if err != nil {
 			return fmt.Errorf("expand assignment %s: %w", name, err)
 		}
@@ -336,14 +357,14 @@ func scalarArrayAssignment(current expand.Variable, declaredKind expand.ValueKin
 	return current, true
 }
 
-func (e *ExecutionContext) assignmentValue(s *State, assignment *syntax.Assign, kind expand.ValueKind) (expand.Variable, map[int]struct{}, bool, error) {
+func (e *ExecutionContext) assignmentValue(s *State, assignment *syntax.Assign, kind expand.ValueKind, prepared *commandExpansions) (expand.Variable, map[int]struct{}, bool, error) {
 	if assignment.Array != nil {
-		return e.arrayValue(s, assignment.Array, kind)
+		return prepared.array(e, s, assignment.Array, kind)
 	}
 	value := ""
 	unknown := false
 	if assignment.Value != nil {
-		expanded, expandedUnknown, err := e.literalValueWithCertainty(s, assignment.Value)
+		expanded, expandedUnknown, err := prepared.literal(e, s, assignment.Value)
 		if err != nil {
 			return expand.Variable{}, nil, false, err
 		}
@@ -351,6 +372,17 @@ func (e *ExecutionContext) assignmentValue(s *State, assignment *syntax.Assign, 
 		unknown = expandedUnknown
 	}
 	if assignment.Index != nil {
+		if word, ok := assignment.Index.(*syntax.Word); ok && prepared != nil {
+			if index := prepared.literals[word]; index != nil {
+				value, unknown := index.Data()
+				if unknown {
+					return expand.Variable{}, nil, false, newUnknownValueError("array index")
+				}
+				copy := *assignment
+				copy.Index = &syntax.Word{Parts: []syntax.WordPart{&syntax.Lit{Value: value}}}
+				assignment = &copy
+			}
+		}
 		current := s.vars.Get(assignment.Name.Value)
 		unknown = unknown || s.vars.isUnknown(assignment.Name.Value)
 		if arithmHasUnknownData(s, assignment.Index) {
@@ -571,7 +603,7 @@ func (e *ExecutionContext) literalValue(s *State, word *syntax.Word) (value stri
 	if word == nil {
 		return "", nil
 	}
-	hostUnknown := wordHasHostUnknown(s, word)
+	hostUnknown := literalWordCertainty(s, word).hostUnknown()
 	value, err = e.expandWordValue(s, word, expand.Literal)
 	if err == nil && hostUnknown {
 		err = fmt.Errorf("word depends on host runtime state")
@@ -587,7 +619,7 @@ func (e *ExecutionContext) expandWordValue(s *State, word *syntax.Word, expandVa
 	if err := normalizeWordArithmeticLiterals(word); err != nil {
 		return "", err
 	}
-	if err := validateUnknownParameterExpansions(s, word); err != nil {
+	if err := validateParameterExpansions(s, word, false); err != nil {
 		return "", err
 	}
 	restore := maskInactiveParameterWords(s, word)

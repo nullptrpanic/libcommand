@@ -22,15 +22,18 @@ func executeShift(_ context.Context, shell *runtime.CommandContext, invocation *
 	}
 	if len(args) == 1 {
 		value, err := strconv.Atoi(args[0])
-		if err != nil || value < 0 {
+		if err != nil {
 			return commandResult(shell, nil, []byte("shift: numeric argument required\n"), 2), nil
+		}
+		if value < 0 {
+			return commandResult(shell, nil, []byte("shift: shift count out of range\n"), 1), nil
 		}
 		amount = value
 	}
-	arguments := shell.PositionalArguments()
+	arguments := shell.TypedPositionalArguments()
 	if amount > len(arguments) {
 		return commandResult(shell, nil, nil, 1), nil
 	}
-	shell.ReplacePositionalArguments(arguments[amount:])
+	shell.ReplaceTypedPositionalArguments(arguments[amount:])
 	return commandResult(shell, nil, nil, 0), nil
 }

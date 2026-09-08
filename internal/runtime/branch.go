@@ -18,32 +18,30 @@ func (e *ExecutionContext) evaluateIf(s *State, clause *syntax.IfClause) ([]*pat
 		return conditionPaths, err
 	}
 	results := make([]*pathResult, 0, len(conditionPaths))
-	for _, conditionPath := range conditionPaths {
-		if conditionPath.status != StatusCompleted {
-			results = append(results, conditionPath)
+	for index, conditionPath := range conditionPaths {
+		if e.collectInactivePath(&results, conditionPath) {
 			continue
 		}
 		resolvedPaths, resolveErr := e.resolveExitStatus(conditionPath, sourceLocation(clause))
 		if resolveErr != nil {
 			return append(results, resolvedPaths...), resolveErr
 		}
-		for _, resolved := range resolvedPaths {
-			if e.stop {
-				resolved.status = StatusTerminated
-				results = append(results, resolved)
+		for resolvedIndex, resolved := range resolvedPaths {
+			if e.collectInactivePath(&results, resolved) {
 				continue
 			}
 			exitCode, _ := resolved.state.exitStatus.Data()
 			matched := exitCode == 0
-			var branchPaths []*pathResult
-			if matched {
-				branchPaths, err = e.evaluateStatements([]*pathResult{resolved}, clause.Then)
-			} else if clause.Else != nil {
-				branchPaths, err = e.evaluateIf(resolved.state, clause.Else)
-			} else {
+			branchPaths, err := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+				if matched {
+					return e.evaluateStatements([]*pathResult{resolved}, clause.Then)
+				}
+				if clause.Else != nil {
+					return e.evaluateIf(resolved.state, clause.Else)
+				}
 				resolved.state.setExitCode(0)
-				branchPaths = []*pathResult{resolved}
-			}
+				return []*pathResult{resolved}, nil
+			}, results, conditionPaths[index+1:], resolvedPaths[resolvedIndex+1:])
 			results = append(results, branchPaths...)
 			if err != nil {
 				return results, err
@@ -59,29 +57,29 @@ func (e *ExecutionContext) evaluateLogical(s *State, command *syntax.BinaryCmd) 
 		return leftPaths, err
 	}
 	results := make([]*pathResult, 0, len(leftPaths))
-	for _, leftPath := range leftPaths {
-		if leftPath.status != StatusCompleted {
-			results = append(results, leftPath)
+	for index, leftPath := range leftPaths {
+		if e.collectInactivePath(&results, leftPath) {
 			continue
 		}
 		resolvedPaths, resolveErr := e.resolveExitStatus(leftPath, sourceLocation(command))
 		if resolveErr != nil {
 			return append(results, resolvedPaths...), resolveErr
 		}
-		for _, resolved := range resolvedPaths {
-			if e.stop {
-				resolved.status = StatusTerminated
-				results = append(results, resolved)
+		for resolvedIndex, resolved := range resolvedPaths {
+			if e.collectInactivePath(&results, resolved) {
 				continue
 			}
 			exitCode, _ := resolved.state.exitStatus.Data()
 			succeeded := exitCode == 0
 			runRight := command.Op == syntax.AndStmt && succeeded || command.Op == syntax.OrStmt && !succeeded
 			if !runRight {
+				resolved.failureHandled = true
 				results = append(results, resolved)
 				continue
 			}
-			rightPaths, err := e.evaluateStatement(resolved.state, command.Y)
+			rightPaths, err := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+				return e.evaluateStatement(resolved.state, command.Y)
+			}, results, leftPaths[index+1:], resolvedPaths[resolvedIndex+1:])
 			results = append(results, rightPaths...)
 			if err != nil {
 				return results, err
@@ -125,7 +123,7 @@ func (e *ExecutionContext) evaluateTest(s *State, clause *syntax.TestClause) ([]
 }
 
 func (e *ExecutionContext) evaluateCase(s *State, clause *syntax.CaseClause) ([]*pathResult, error) {
-	subjectUnknown := wordCertainty(s, clause.Word) != 0
+	subjectUnknown := literalWordCertainty(s, clause.Word) != 0
 	subject := ""
 	var err error
 	subject, err = e.literalValue(s, clause.Word)
@@ -159,12 +157,8 @@ func (e *ExecutionContext) evaluateCase(s *State, clause *syntax.CaseClause) ([]
 	finished := make([]*pathResult, 0, len(clause.Items)+1)
 	for _, item := range clause.Items {
 		next := make([]*casePath, 0, len(active)+1)
-		for _, current := range active {
-			if current.path.status != StatusCompleted || e.stop {
-				if e.stop && current.path.status == StatusCompleted {
-					current.path.status = StatusTerminated
-				}
-				finished = append(finished, current.path)
+		for activeIndex, current := range active {
+			if e.collectInactivePath(&finished, current.path) {
 				continue
 			}
 			evaluations := []*caseTruthResult{{path: current.path, value: truthTrue}}
@@ -179,11 +173,14 @@ func (e *ExecutionContext) evaluateCase(s *State, clause *syntax.CaseClause) ([]
 					return append(finished, paths...), matchErr
 				}
 			}
-			for _, evaluation := range evaluations {
+			evaluatedPaths := make([]*pathResult, len(evaluations))
+			for index, evaluation := range evaluations {
+				evaluatedPaths[index] = evaluation.path
+			}
+			for evaluationIndex, evaluation := range evaluations {
 				path := evaluation.path
 				match := evaluation.value
-				if path.status != StatusCompleted {
-					finished = append(finished, path)
+				if e.collectInactivePath(&finished, path) {
 					continue
 				}
 				if match == truthUnknown {
@@ -215,15 +212,17 @@ func (e *ExecutionContext) evaluateCase(s *State, clause *syntax.CaseClause) ([]
 					paths := append(finished, activeBranches...)
 					return append(paths, branch), err
 				}
-				branchPaths, err := e.evaluateStatements([]*pathResult{branch}, item.Stmts)
+				branchPaths, err := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+					return e.evaluateStatements([]*pathResult{branch}, item.Stmts)
+				}, finished, activeBranches, pathResults(active[activeIndex+1:]), evaluatedPaths[evaluationIndex+1:])
 				if err != nil {
 					return append(finished, branchPaths...), err
 				}
 				for _, branchPath := range branchPaths {
-					if branchPath.status != StatusCompleted || e.stop || item.Op == syntax.Break {
-						if e.stop && branchPath.status == StatusCompleted {
-							branchPath.status = StatusTerminated
-						}
+					if e.collectInactivePath(&finished, branchPath) {
+						continue
+					}
+					if item.Op == syntax.Break {
 						finished = append(finished, branchPath)
 						continue
 					}
@@ -251,7 +250,7 @@ func (e *ExecutionContext) evaluateCase(s *State, clause *syntax.CaseClause) ([]
 }
 
 func (e *ExecutionContext) collectInactivePath(completed *[]*pathResult, current *pathResult) bool {
-	if current.status == StatusCompleted && !e.stop {
+	if current.status == StatusCompleted && current.state.signal == signalNone && !e.stop {
 		return false
 	}
 	if e.stop && current.status == StatusCompleted {
@@ -364,7 +363,7 @@ func (e *ExecutionContext) caseItemTruth(s *State, subject string, subjectUnknow
 }
 
 func (e *ExecutionContext) casePattern(s *State, word *syntax.Word) (string, error) {
-	certainty := wordCertainty(s, word)
+	certainty := literalWordCertainty(s, word)
 	value, err := e.patternValue(s, word)
 	if err != nil {
 		return "", err

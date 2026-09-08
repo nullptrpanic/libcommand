@@ -27,6 +27,13 @@ type State struct {
 	stdin               *uncertain[[]byte]
 	stdout              *uncertain[[]byte]
 	stderr              *uncertain[[]byte]
+	stdoutCursor        *streamCursor
+	stderrCursor        *streamCursor
+	descriptors         map[int]*descriptorTarget
+	descriptorBytes     int
+	redirectionFrames   []*redirectionPlan
+	redirectionBytes    int
+	keptRedirections    *redirectionPlan
 	fs                  *memoryFS
 	issue               error
 	exitStatus          *uncertain[int]
@@ -141,6 +148,7 @@ func initializeState(request *Request, maximum int) (*State, error) {
 		commandStates:    make(map[string][]uint64),
 	}
 	s.replacePositionalArguments(request.Args)
+	s.setDescriptors(map[int]*descriptorTarget{0: {key: new(byte), input: s.stdin}})
 	s.initialBytes, _ = stateMaterialization(s)
 	return s, nil
 }
@@ -173,6 +181,10 @@ func newShellChild(parent *State) *State {
 		functions:           make(map[string]*syntax.FuncDecl),
 		dir:                 parent.dir,
 		stdin:               parent.stdin,
+		descriptors:         parent.descriptors,
+		descriptorBytes:     parent.descriptorBytes,
+		redirectionFrames:   parent.redirectionFrames[:len(parent.redirectionFrames):len(parent.redirectionFrames)],
+		redirectionBytes:    parent.redirectionBytes,
 		stdout:              newCertain[[]byte](nil),
 		stderr:              newCertain[[]byte](nil),
 		exitStatus:          newCertain(0),
@@ -189,45 +201,16 @@ func (s *State) clone() *State {
 	s.functionsShared = true
 	s.localScopesShared = true
 	s.trapsShared = true
-	return &State{
-		vars:                s.vars.clone(),
-		initialBytes:        s.initialBytes,
-		user:                s.user,
-		functions:           s.functions,
-		functionsBytes:      s.functionsBytes,
-		functionsShared:     true,
-		localScopes:         s.localScopes[:len(s.localScopes):len(s.localScopes)],
-		localScopesBytes:    s.localScopesBytes,
-		localScopesShared:   true,
-		substitutionFrames:  cloneSubstitutionFrames(s.substitutionFrames),
-		substitutionBytes:   s.substitutionBytes,
-		dir:                 s.dir,
-		stdin:               s.stdin,
-		stdout:              s.stdout,
-		stderr:              s.stderr,
-		fs:                  s.fs.clone(),
-		issue:               s.issue,
-		exitStatus:          s.exitStatus,
-		pipelineStatuses:    s.pipelineStatuses,
-		options:             s.options,
-		signal:              s.signal,
-		signalDepth:         s.signalDepth,
-		loopDepth:           s.loopDepth,
-		loopExitStatuses:    s.loopExitStatuses[:len(s.loopExitStatuses):len(s.loopExitStatuses)],
-		funcDepth:           s.funcDepth,
-		sourceDepth:         s.sourceDepth,
-		traps:               s.traps,
-		trapsBytes:          s.trapsBytes,
-		trapsShared:         true,
-		exitTrapInherited:   s.exitTrapInherited,
-		backgroundPIDSet:    s.backgroundPIDSet,
-		commandStates:       cloneCommandStates(s.commandStates),
-		pathID:              s.pathID,
-		parent:              s.parent,
-		retainedParentBytes: s.retainedParentBytes,
-		frozen:              s.frozen,
-		frozenBytes:         s.frozenBytes,
-	}
+	cloned := *s
+	cloned.vars = s.vars.clone()
+	cloned.fs = s.fs.clone()
+	cloned.substitutionFrames = cloneSubstitutionFrames(s.substitutionFrames)
+	cloned.commandStates = cloneCommandStates(s.commandStates)
+	// Shared frame entries are immutable; appending must not overwrite siblings.
+	cloned.localScopes = s.localScopes[:len(s.localScopes):len(s.localScopes)]
+	cloned.redirectionFrames = s.redirectionFrames[:len(s.redirectionFrames):len(s.redirectionFrames)]
+	cloned.loopExitStatuses = s.loopExitStatuses[:len(s.loopExitStatuses):len(s.loopExitStatuses)]
+	return &cloned
 }
 
 func cloneCommandStates(source map[string][]uint64) map[string][]uint64 {
@@ -270,6 +253,10 @@ func (s *State) deleteTrap(signal string) {
 }
 
 func (s *State) replacePositionalArguments(args []string) {
+	s.replaceTypedPositionalArguments(concreteArguments(args))
+}
+
+func (s *State) replaceTypedPositionalArguments(args []*Argument) {
 	for _, name := range []string{"#", "@", "*"} {
 		s.vars.delete(name)
 	}
@@ -279,12 +266,27 @@ func (s *State) replacePositionalArguments(args []string) {
 		}
 	}
 	s.vars.put("#", expand.Variable{Set: true, Kind: expand.String, Str: strconv.Itoa(len(args))})
-	positional := append([]string{}, args...)
-	s.vars.put("@", expand.Variable{Set: true, Kind: expand.Indexed, List: positional})
-	s.vars.put("*", expand.Variable{Set: true, Kind: expand.Indexed, List: positional})
+	positional := concreteArgumentValues(args)
+	unknown := hasUnresolvedArguments(args)
+	s.vars.putWithCertainty("@", expand.Variable{Set: true, Kind: expand.Indexed, List: positional}, unknown)
+	s.vars.putWithCertainty("*", expand.Variable{Set: true, Kind: expand.Indexed, List: positional}, unknown)
 	for index, arg := range args {
-		s.vars.put(strconv.Itoa(index+1), expand.Variable{Set: true, Kind: expand.String, Str: arg})
+		s.vars.putWithCertainty(strconv.Itoa(index+1), expand.Variable{Set: true, Kind: expand.String, Str: arg.Value}, arg.Kind == ArgumentUnresolved)
 	}
+}
+
+func (s *State) positionalArguments() []*Argument {
+	count, _ := strconv.Atoi(s.vars.Get("#").String())
+	arguments := make([]*Argument, 0, count)
+	for index := 1; index <= count; index++ {
+		name := strconv.Itoa(index)
+		argument := &Argument{Kind: ArgumentString, Value: s.vars.Get(name).String()}
+		if s.vars.isUnknown(name) {
+			argument = &Argument{Kind: ArgumentUnresolved}
+		}
+		arguments = append(arguments, argument)
+	}
+	return arguments
 }
 
 func (s *State) pushLoop() {

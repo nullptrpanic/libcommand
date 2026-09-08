@@ -25,7 +25,7 @@ type ExecutionContext struct {
 	stop                  bool
 	variableRollbacks     []*variableRollback
 	variableRollbackBytes int
-	nestedShellBytes      int
+	retainedScopeBytes    int
 	backgroundStepLimit   int
 	nextPathID            uint64
 	trace                 *executionTrace
@@ -53,8 +53,9 @@ type outcome struct {
 }
 
 type pathResult struct {
-	state  *State
-	status Status
+	state          *State
+	status         Status
+	failureHandled bool // The current status was already observed or is exempt.
 }
 
 func (e *ExecutionContext) ensurePathID(state *State) uint64 {
@@ -169,9 +170,14 @@ type redirectionPlan struct {
 	descriptors   map[int]*descriptorTarget
 	stdinReplaced bool
 	redirects     []*Redirect
+	saved         map[int]*descriptorTarget
+	bindings      map[int]*byte
+	command       syntax.Command
+	retainedBytes int
 }
 
 type descriptorTarget struct {
+	key       *byte
 	input     *uncertain[[]byte]
 	inputFile string
 	output    *outputTarget
@@ -291,8 +297,13 @@ func (e *ExecutionContext) evaluateStatements(paths []*pathResult, statements []
 			}
 			parentState := currentPath.state
 			e.trace.statementStarted(e, currentPath.state, statement, budget)
+			releaseSiblings, err := e.retainPathBudget(budget, previousBytes, 1)
+			if err != nil {
+				return next, e.failPathGroups([][]*pathResult{next, current[index:]}, err, sourceLocation(statement))
+			}
 			successors, err := e.evaluateStatement(currentPath.state, statement)
 			if err != nil {
+				releaseSiblings()
 				next = append(next, successors...)
 				return next, err
 			}
@@ -304,6 +315,7 @@ func (e *ExecutionContext) evaluateStatements(paths []*pathResult, statements []
 			if suppressErrTrap {
 				e.errTrapSuppressed--
 			}
+			releaseSiblings()
 			if err == nil {
 				if contextErr := e.ctx.Err(); contextErr != nil {
 					for _, successor := range successors {
@@ -438,6 +450,10 @@ func (e *ExecutionContext) evaluateStatementInFrameFully(s *State, statement *sy
 			return results, e.failMaterializationGroups(groups, sourceLocation(statement))
 		}
 
+		releaseSiblings, err := e.retainPathBudget(budget, previousBytes, 1)
+		if err != nil {
+			return results, e.failPathGroups([][]*pathResult{results, pending, {current}}, err, sourceLocation(statement))
+		}
 		paths, evaluationErr := e.evaluateStatementInFrame(current.state, statement)
 		continuation := false
 		if request, requested := requestedSubstitution(evaluationErr); requested {
@@ -447,6 +463,7 @@ func (e *ExecutionContext) evaluateStatementInFrameFully(s *State, statement *sy
 			paths, evaluationErr = e.evaluateProcessSubstitutionPaths(request.state, request.substitution)
 			continuation = true
 		}
+		releaseSiblings()
 
 		if !budget.replace(previousBytes, previousRetained, paths) {
 			groups := [][]*pathResult{results, pending, paths}
@@ -492,8 +509,9 @@ func (e *ExecutionContext) evaluateStatementInFrame(s *State, statement *syntax.
 		positive.Negated = false
 		paths, err := e.evaluateStatementWithoutErrexit(s, &positive)
 		for index := range paths {
+			paths[index].failureHandled = true
 			exitCode, exitUnresolved := paths[index].state.exitStatus.Data()
-			if paths[index].status == StatusCompleted && !exitUnresolved {
+			if paths[index].status == StatusCompleted && paths[index].state.signal == signalNone && !exitUnresolved {
 				pipelineStatuses, pipelineUnknown := paths[index].state.pipelineStatusValues()
 				paths[index].state.setExitCode(boolExitCode(exitCode != 0))
 				paths[index].state.setPipelineStatusValues(pipelineStatuses, pipelineUnknown)
@@ -576,20 +594,28 @@ func (e *ExecutionContext) evaluateRedirectedStatement(s *State, statement *synt
 		result := e.unresolved(s, err.Error(), sourceLocation(statement))
 		return []*pathResult{{state: s, status: result.status}}, nil
 	}
-	originalStdin := s.stdin
-	originalStdout := s.stdout
-	originalStderr := s.stderr
-	stdoutData, _ := originalStdout.Data()
-	stderrData, _ := originalStderr.Data()
-	stdoutPrefix := len(stdoutData)
-	stderrPrefix := len(stderrData)
+	plan.command = statement.Cmd
+	s.redirectionFrames = append(s.redirectionFrames, plan)
+	plan.retainedBytes = descriptorMaterialization(plan.saved, nil) + materialize.EntryBytes
+	for _, redirect := range plan.redirects {
+		plan.retainedBytes += materialize.EntryBytes + len(redirect.Target)
+	}
+	plan.retainedBytes += len(plan.bindings) * materialize.EntryBytes
+	s.redirectionBytes += plan.retainedBytes
 	stdin := plan.descriptors[0].input
 	if stdin == nil {
 		stdin = newCertain[[]byte](nil)
 	}
-	s.stdin = cloneUncertainBytes(stdin)
-	s.stdout = newCertain(stdoutData)
-	s.stderr = newCertain(stderrData)
+	s.stdin = stdin
+	s.setDescriptors(plan.descriptors)
+	// Only restoration bindings survive the scope, not an extra snapshot of
+	// every active input buffer after subsequent reads advance its cursor.
+	plan.descriptors = nil
+	if err := e.checkStateMaterialization(s); err != nil {
+		s.restoreRedirections(plan)
+		e.setIssue(s, err, sourceLocation(statement))
+		return []*pathResult{{state: s, status: StatusIncomplete}}, err
+	}
 	unredirected := *statement
 	unredirected.Redirs = nil
 	redirectCheckpoint := len(e.redirects)
@@ -600,42 +626,31 @@ func (e *ExecutionContext) evaluateRedirectedStatement(s *State, statement *synt
 	paths, evaluationErr := e.evaluateStatement(s, &unredirected)
 	for index := range paths {
 		path := paths[index]
-		pathStdout, stdoutUnresolved := path.state.stdout.Data()
-		pathStderr, stderrUnresolved := path.state.stderr.Data()
-		stdout := append([]byte(nil), pathStdout[stdoutPrefix:]...)
-		stderr := append([]byte(nil), pathStderr[stderrPrefix:]...)
-		path.state.stdout = originalStdout
-		path.state.stderr = originalStderr
-		stdout, stderr, stdoutUnresolved, stderrUnresolved, outputErr := e.applyOutputTargets(path.state, plan, stdout, stderr, stdoutUnresolved, stderrUnresolved)
-		if outputErr != nil {
-			e.setIssue(path.state, outputErr, sourceLocation(statement))
-			path.status = StatusIncomplete
-			if plan.stdinReplaced {
-				path.state.stdin = originalStdin
-			}
-			continue
-		}
-		if status := e.appendStreams(path.state, stdout, stderr, stdoutUnresolved, stderrUnresolved, sourceLocation(statement)); status != StatusCompleted {
-			path.status = status
-		}
-		if plan.stdinReplaced {
-			path.state.stdin = originalStdin
-		}
+		path.state.restoreRedirections(plan)
 	}
 	return paths, evaluationErr
 }
 
 func (e *ExecutionContext) evaluatePipeline(s *State, pipeline *syntax.BinaryCmd) ([]*pathResult, error) {
+	releaseParent, err := e.retainNestedShellParent(s)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseParent()
 	left := s.clone()
 	left.stdin = s.stdin
 	left.resetOutput()
+	left.captureDescriptor(1)
+	if pipeline.Op == syntax.PipeAll {
+		left.captureDescriptor(2)
+	}
 	leftPaths, err := e.evaluateStatementWithoutErrexit(left, pipeline.X)
 	if err != nil {
 		return leftPaths, err
 	}
 
 	results := make([]*pathResult, 0, len(leftPaths))
-	for _, leftPath := range leftPaths {
+	for leftIndex, leftPath := range leftPaths {
 		if leftPath.status != StatusCompleted || e.stop {
 			parent := s.clone()
 			inheritPathIdentity(parent, leftPath.state)
@@ -644,7 +659,7 @@ func (e *ExecutionContext) evaluatePipeline(s *State, pipeline *syntax.BinaryCmd
 			status := leftPath.status
 			leftStdout, stdoutUnresolved := leftPath.state.stdout.Data()
 			leftStderr, stderrUnresolved := leftPath.state.stderr.Data()
-			if outputStatus := e.appendStreams(parent, leftStdout, leftStderr, stdoutUnresolved, stderrUnresolved, sourceLocation(pipeline)); outputStatus != StatusCompleted {
+			if outputStatus := e.appendCapturedStreams(parent, leftStdout, leftStderr, stdoutUnresolved, stderrUnresolved, sourceLocation(pipeline)); outputStatus != StatusCompleted {
 				status = outputStatus
 			}
 			exitCode, exitUnresolved := leftPath.state.exitStatus.Data()
@@ -674,16 +689,18 @@ func (e *ExecutionContext) evaluatePipeline(s *State, pipeline *syntax.BinaryCmd
 		mergeIssue(right, leftPath.state)
 		right.fs = leftPath.state.fs.clone()
 		if pipeInputUnresolved {
-			right.stdin = newUnresolved(pipeInput)
+			right.bindInput(newUnresolved(pipeInput))
 		} else {
-			right.stdin = newCertain(pipeInput)
+			right.bindInput(newCertain(pipeInput))
 		}
 		right.resetOutput()
 		rightInput := &pathResult{state: right, status: StatusCompleted}
 		if err := e.checkPathGroupsMaterialization(0, sourceLocation(pipeline), results, []*pathResult{rightInput}); err != nil {
 			return append(results, rightInput), err
 		}
-		rightPaths, rightErr := e.evaluateStatementWithoutErrexit(right, pipeline.Y)
+		rightPaths, rightErr := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+			return e.evaluateStatement(right, pipeline.Y)
+		}, results, leftPaths[leftIndex:])
 		for _, rightPath := range rightPaths {
 			parent := s.clone()
 			inheritPathIdentity(parent, rightPath.state)
@@ -695,7 +712,7 @@ func (e *ExecutionContext) evaluatePipeline(s *State, pipeline *syntax.BinaryCmd
 			combinedStderr := append(append([]byte(nil), leftStderr...), rightStderr...)
 			combinedStderrUnresolved := leftStderrUnresolved || rightStderrUnresolved
 			status := rightPath.status
-			if outputStatus := e.appendStreams(parent, rightStdout, combinedStderr, rightStdoutUnresolved, combinedStderrUnresolved, sourceLocation(pipeline)); outputStatus != StatusCompleted {
+			if outputStatus := e.appendCapturedStreams(parent, rightStdout, combinedStderr, rightStdoutUnresolved, combinedStderrUnresolved, sourceLocation(pipeline)); outputStatus != StatusCompleted {
 				status = outputStatus
 			}
 			rightExitCode, rightExitUnresolved := rightPath.state.exitStatus.Data()
@@ -733,12 +750,18 @@ func (e *ExecutionContext) evaluateProcessSubstitutionPaths(s *State, substituti
 		return e.unresolvedPath(s, fmt.Sprintf("unsupported process substitution operator %s", substitution.Op), sourceLocation(substitution)), nil
 	}
 
+	releaseParent, err := e.retainNestedShellParent(s)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseParent()
 	child := s.clone()
 	clearInheritedExitTrap(child)
 	if status := e.checkContext(child, sourceLocation(substitution)); status != StatusCompleted {
 		return []*pathResult{{state: child, status: status}}, nil
 	}
 	child.resetOutput()
+	child.captureDescriptor(1)
 	childPaths, err := e.evaluateStatements([]*pathResult{{state: child, status: StatusCompleted}}, substitution.Stmts)
 	childPaths, trapErr := e.evaluateExitTraps(childPaths)
 	if err == nil {
@@ -753,7 +776,7 @@ func (e *ExecutionContext) evaluateProcessSubstitutionPaths(s *State, substituti
 		parent.fs = childPath.state.fs.clone()
 		status := childPath.status
 		childStderr, stderrUnresolved := childPath.state.stderr.Data()
-		if outputStatus := e.appendStreams(parent, nil, childStderr, false, stderrUnresolved, sourceLocation(substitution)); outputStatus != StatusCompleted {
+		if outputStatus := e.appendCapturedStreams(parent, nil, childStderr, false, stderrUnresolved, sourceLocation(substitution)); outputStatus != StatusCompleted {
 			status = outputStatus
 		}
 		if status != StatusCompleted {
@@ -777,7 +800,7 @@ func (e *ExecutionContext) evaluateProcessOutputs(paths []*pathResult) ([]*pathR
 	for {
 		found := false
 		next := make([]*pathResult, 0, len(current))
-		for _, outer := range current {
+		for outerIndex, outer := range current {
 			outputs := outer.state.takeProcessOutputs()
 			if len(outputs) == 0 || outer.status != StatusCompleted {
 				next = append(next, outer)
@@ -792,7 +815,7 @@ func (e *ExecutionContext) evaluateProcessOutputs(paths []*pathResult) ([]*pathR
 			active := []*pathResult{outer}
 			for _, name := range names {
 				consumed := make([]*pathResult, 0, len(active))
-				for _, currentPath := range active {
+				for activeIndex, currentPath := range active {
 					child := currentPath.state.clone()
 					clearInheritedExitTrap(child)
 					if status := e.checkContext(child, sourceLocation(outputs[name])); status != StatusCompleted {
@@ -804,16 +827,19 @@ func (e *ExecutionContext) evaluateProcessOutputs(paths []*pathResult) ([]*pathR
 					}
 					input, inputUnresolved := child.fs.readValue(name)
 					if inputUnresolved {
-						child.stdin = newUnresolved(input)
+						child.bindInput(newUnresolved(input))
 					} else {
-						child.stdin = newCertain(input)
+						child.bindInput(newCertain(input))
 					}
 					child.resetOutput()
-					childPaths, err := e.evaluateStatements([]*pathResult{{state: child, status: StatusCompleted}}, outputs[name].Stmts)
-					childPaths, trapErr := e.evaluateExitTraps(childPaths)
-					if err == nil {
-						err = trapErr
-					}
+					childPaths, err := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+						paths, err := e.evaluateStatements([]*pathResult{{state: child, status: StatusCompleted}}, outputs[name].Stmts)
+						paths, trapErr := e.evaluateExitTraps(paths)
+						if err == nil {
+							err = trapErr
+						}
+						return paths, err
+					}, next, current[outerIndex+1:], consumed, active[activeIndex:])
 					for _, childPath := range childPaths {
 						parent := currentPath.state.clone()
 						inheritPathIdentity(parent, childPath.state)
@@ -825,7 +851,7 @@ func (e *ExecutionContext) evaluateProcessOutputs(paths []*pathResult) ([]*pathR
 						}
 						childStdout, stdoutUnresolved := childPath.state.stdout.Data()
 						childStderr, stderrUnresolved := childPath.state.stderr.Data()
-						if outputStatus := e.appendStreams(parent, childStdout, childStderr, stdoutUnresolved, stderrUnresolved, sourceLocation(outputs[name])); outputStatus != StatusCompleted {
+						if outputStatus := e.appendCapturedStreams(parent, childStdout, childStderr, stdoutUnresolved, stderrUnresolved, sourceLocation(outputs[name])); outputStatus != StatusCompleted {
 							status = outputStatus
 						}
 						consumed = append(consumed, &pathResult{state: parent, status: status})

@@ -2,10 +2,61 @@ package libcommand
 
 import (
 	"context"
+	"errors"
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
+
+func TestSimulatorRejectsRecursiveArithmeticText(t *testing.T) {
+	for _, source := range []string{
+		`"$[@]}"""`,
+		`lark-cli "$(( @ ))"`,
+		`value='${value}'; lark-cli "$((value))"`,
+		`value='${value}+1'; lark-cli "$((value))"`,
+	} {
+		t.Run(source, func(t *testing.T) {
+			// A deadline makes the pre-fix recursion fail safely rather than
+			// exhausting the test process stack.
+			ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+			defer cancel()
+			calls := 0
+			simulator := mustBuildSimulator(t, "lark-cli", countInvocations(&calls))
+			err := simulator.Simulate(ctx, &SimulationRequest{Source: source})
+			if err == nil || errors.Is(err, context.DeadlineExceeded) || calls != 0 {
+				t.Fatalf("calls=%d, error=%v", calls, err)
+			}
+		})
+	}
+	requireFirstArguments(t, `a='1+2'; b='a*2'; lark-cli "$((b+b))" "$((a+a))"`, []string{"12"})
+}
+
+func TestSimulatorRejectsUnsupportedParameterTransformsWithoutPanic(t *testing.T) {
+	for _, operator := range []string{"K", "k", "U", "u", "L"} {
+		for _, source := range []string{
+			`lark-cli "${0@` + operator + `}"`,
+			`value=${0@` + operator + `}; lark-cli "$value"`,
+			`lark-cli "$(echo "${0@` + operator + `}")"`,
+			`lark-cli "$(( ${0@` + operator + `} ))"`,
+			`for x in ${0@` + operator + `}; do lark-cli "$x"; done`,
+			`case ${0@` + operator + `} in *) lark-cli unreachable;; esac`,
+			"cat <<EOF\n${0@" + operator + "}\nEOF\n",
+		} {
+			t.Run(source, func(t *testing.T) {
+				calls := 0
+				simulator := mustBuildSimulator(t, "lark-cli", countInvocations(&calls))
+				err := simulator.Simulate(context.Background(), &SimulationRequest{Source: source})
+				if err == nil || !strings.Contains(err.Error(), "unsupported parameter transformation @"+operator) || calls != 0 {
+					t.Fatalf("calls=%d, error=%v", calls, err)
+				}
+			})
+		}
+	}
+	// An unexecuted branch/operand is not an expansion attempt.
+	requireFirstArguments(t, `value=known; if false; then echo "${0@K}"; fi; lark-cli "${value:-${0@K}}"`, []string{"known"})
+	requireFirstArguments(t, `value=known; lark-cli "${value@Q}"`, []string{"known"})
+}
 
 func TestSimulatorRestoresTemporaryAssignmentsOnUnknownFailure(t *testing.T) {
 	source := `value=outer

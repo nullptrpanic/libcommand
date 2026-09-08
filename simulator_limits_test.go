@@ -134,6 +134,102 @@ func TestSimulatorLimitsAggregateRuntimeStateBeforeHandler(t *testing.T) {
 	}
 }
 
+func TestSimulatorLimitsLiveNestedShellParents(t *testing.T) {
+	const maximum = 256 << 10
+	for _, form := range []*struct{ name, open, close string }{
+		{name: "subshell", open: `( big=${big}x; `, close: ` )`},
+		{name: "command substitution", open: `value=$( big=${big}x; `, close: ` )`},
+		{name: "process substitution", open: `cat <( big=${big}x; `, close: ` )`},
+		{name: "process output", open: `: > >( big=${big}x; `, close: ` )`},
+		{name: "pipeline", open: `true | { big=${big}x; `, close: `; }`},
+		{name: "background", open: `{ big=${big}x; `, close: `; } & wait`},
+	} {
+		t.Run(form.name, func(t *testing.T) {
+			calls := 0
+			simulator := NewBuilder().Limits(&Limits{MaxMemoryBytes: maximum}).Command("record", countInvocations(&calls)).Build()
+			for _, depth := range []int{2, 40} {
+				calls = 0
+				err := simulator.Simulate(context.Background(), &SimulationRequest{
+					Source: strings.Repeat(form.open, depth) + `record` + strings.Repeat(form.close, depth),
+					Env:    map[string]string{"big": strings.Repeat("x", 32000)},
+				})
+				if depth == 2 {
+					if err != nil || calls != 1 {
+						t.Fatalf("fitting nested state: calls=%d, err=%v", calls, err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "maximum materialized byte count") || calls != 0 {
+					t.Fatalf("oversized nested state: calls=%d, err=%v", calls, err)
+				}
+			}
+			calls = 0
+			if err := simulator.Simulate(context.Background(), &SimulationRequest{
+				Source: strings.Repeat(form.open+`record`+form.close+"\n", 16),
+				Env:    map[string]string{"big": strings.Repeat("x", 32000)},
+			}); err != nil || calls != 16 {
+				t.Fatalf("finished child scopes retain charges: calls=%d, err=%v", calls, err)
+			}
+			// The same simulator must not retain failed-run charges.
+			if err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `record`}); err != nil {
+				t.Fatalf("subsequent simulation: %v", err)
+			}
+		})
+	}
+}
+
+func TestSimulatorLimitsGrowingNestedBranchSiblings(t *testing.T) {
+	const fork = `if missing; then :; fi; `
+	const grow = `printf -v big '%20000s' x; record; `
+	for _, form := range []*struct{ name, source string }{
+		{name: "if", source: `if { ` + strings.Repeat(fork, 5) + `true; }; then ` + grow + `fi`},
+		{name: "logical", source: `{ ` + strings.Repeat(fork, 5) + `true; } && { ` + grow + `}`},
+		{name: "word loop", source: `for i in a; do ` + strings.Repeat(fork, 5) + grow + `done`},
+		{name: "while", source: `while { ` + strings.Repeat(fork, 5) + `true; }; do ` + grow + `break; done`},
+		{name: "case", source: `case x in "$( ` + strings.Repeat(fork, 5) + `echo x )") ` + grow + `;; esac`},
+		{name: "substitution replay", source: `x=$( ` + strings.Repeat(fork, 5) + `echo x ); ` + grow},
+		{name: "finished word loop siblings", source: `for i in {1..32}; do if missing; then ` + grow + `break; fi; done`},
+		{name: "finished arithmetic loop siblings", source: `for ((i=0; i<32; i++)); do if missing; then ` + grow + `break; fi; done`},
+		{name: "finished while siblings", source: `i=0; while ((i++<32)); do if missing; then ` + grow + `break; fi; done`},
+		{name: "case alternatives", source: `x=$(missing); case "$x" in ` + strings.Repeat(`p) `+grow+`;; `, 32) + `esac`},
+	} {
+		t.Run(form.name, func(t *testing.T) {
+			for _, maximum := range []int{256 << 10, 4 << 20} {
+				calls := 0
+				simulator := NewBuilder().Limits(&Limits{MaxMemoryBytes: maximum}).Command("record", countInvocations(&calls)).Build()
+				err := simulator.Simulate(context.Background(), &SimulationRequest{Source: form.source})
+				if maximum == 4<<20 {
+					if err != nil || calls != 32 {
+						t.Fatalf("fitting branches: calls=%d, err=%v", calls, err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "maximum materialized byte count") || calls >= maximum/20000 {
+					t.Fatalf("budget checked after too many branches grew: calls=%d, err=%v", calls, err)
+				}
+			}
+		})
+	}
+}
+
+func TestSimulatorLimitsGrowingTrapSiblings(t *testing.T) {
+	for _, signal := range []string{"ERR", "EXIT"} {
+		t.Run(signal, func(t *testing.T) {
+			calls := 0
+			simulator := NewBuilder().Limits(&Limits{MaxMemoryBytes: 256 << 10}).
+				Command("fork", func(_ context.Context, c *CommandContext, _ *Invocation) (*CommandResult, error) {
+					result := c.NewResult()
+					for range 32 {
+						result.AddOutput(c.ForkState(), c.Output().ExitCode(Resolved(1)).Build())
+					}
+					return result, nil
+				}).Command("record", countInvocations(&calls)).Build()
+			err := simulator.Simulate(context.Background(), &SimulationRequest{
+				Source: `trap 'printf -v big "%20000s" x; record' ` + signal + `; fork`,
+			})
+			if err == nil || !strings.Contains(err.Error(), "maximum materialized byte count") || calls >= (256<<10)/20000 {
+				t.Fatalf("trap growth: calls=%d, err=%v", calls, err)
+			}
+		})
+	}
+}
+
 func TestSimulatorLimitsHandlerEnvironmentSnapshotBeforeDispatch(t *testing.T) {
 	callbacks := 0
 	simulator := NewBuilder().

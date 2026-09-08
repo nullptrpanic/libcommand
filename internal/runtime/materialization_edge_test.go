@@ -163,7 +163,7 @@ func TestRepeatedPathAndAuxiliaryMaterializationEdges(t *testing.T) {
 
 	execution, _ = newNoOpExecutor(context.Background(), 10, &Request{})
 	execution.variableRollbackBytes = math.MaxInt
-	execution.nestedShellBytes = 1
+	execution.retainedScopeBytes = 1
 	if _, ok := execution.retainedAuxiliaryBytes(math.MaxInt); ok {
 		t.Fatal("overflowing auxiliary bytes were accepted")
 	}

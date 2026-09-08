@@ -25,6 +25,32 @@ type declarationError struct {
 	exitCode int
 }
 
+func registerDeclaration(name string) {
+	registerCommand(name, executeDeclaration)
+	definitions[name].Prepare = prepareDeclaration
+}
+
+func prepareDeclaration(shell *runtime.CommandContext, invocation *runtime.Invocation) error {
+	clause, ok := shell.CommandSyntax().(*syntax.DeclClause)
+	if !ok {
+		return nil
+	}
+	for _, assignment := range clause.Args {
+		if assignment.Name == nil {
+			if _, _, err := shell.PrepareLiteral(assignment.Value); err != nil {
+				return err
+			}
+		}
+	}
+	kind := expand.Unknown
+	if spec, _, err := declarationFromClause(shell, clause); err == nil && spec != nil {
+		kind = spec.kind
+	}
+	arguments, err := shell.PrepareDeclarationArguments(clause, kind)
+	invocation.Args = arguments
+	return err
+}
+
 func (err *declarationError) Error() string {
 	return err.message
 }

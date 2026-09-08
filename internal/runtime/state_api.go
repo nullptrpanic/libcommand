@@ -156,7 +156,13 @@ func (s *State) maximumMemoryBytes() int {
 	return normalizedMaxMemoryBytes(s.fs.maximumBytes)
 }
 
-func (s *State) mutate(change func() error) (err error) {
+func (s *State) mutate(change func() error) error {
+	return s.mutateAndCheck(change, s.checkPublicMutationMaterialization)
+}
+
+// Keep variable/directory rollback in one place; the caller owns the scope of
+// the budget check (one public state or an active execution with retained paths).
+func (s *State) mutateAndCheck(change, check func() error) (err error) {
 	if s.frozen {
 		return errFrozenState
 	}
@@ -170,7 +176,7 @@ func (s *State) mutate(change func() error) (err error) {
 		}
 	}()
 	if err = change(); err == nil {
-		err = s.checkPublicMutationMaterialization()
+		err = check()
 	}
 	return err
 }

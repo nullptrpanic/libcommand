@@ -336,6 +336,9 @@ func stateMaterialization(s *State) (int, bool) {
 			return 0, false
 		}
 	}
+	if !add(s.descriptorBytes) || !add(s.redirectionBytes) {
+		return 0, false
+	}
 	pipelineStatuses, _ := s.pipelineStatuses.Data()
 	if len(pipelineStatuses) != 0 {
 		pipelineBytes, ok := multiplyMaterialization(len(pipelineStatuses), materialize.EntryBytes, math.MaxInt)
@@ -508,6 +511,48 @@ type retainedPathBudget struct {
 	baselineSet bool
 }
 
+// retainPathBudget charges paths owned by an outer evaluator while it delegates
+// the current path. Nested checks deduct the initial baseline only once, so
+// suspended paths are charged in full, without another baseline deduction.
+func (e *ExecutionContext) retainPathBudget(budget *retainedPathBudget, delegatedBytes, delegatedCount int) (func(), error) {
+	maximum := normalizedMaxMemoryBytes(e.config.MaxMemoryBytes)
+	bytes, ok := multiplyMaterialization(budget.pathCount-delegatedCount, materialize.EntryBytes, maximum)
+	if ok {
+		bytes, ok = materialize.Add(bytes, budget.stateBytes-delegatedBytes, maximum)
+	}
+	auxiliary, auxiliaryOK := e.retainedAuxiliaryBytes(maximum)
+	if ok && auxiliaryOK {
+		_, ok = materialize.Add(auxiliary, bytes, maximum)
+	}
+	if !ok || !auxiliaryOK {
+		return nil, materialize.LimitError(maximum)
+	}
+	previous := e.retainedScopeBytes
+	e.retainedScopeBytes += bytes
+	return func() { e.retainedScopeBytes = previous }, nil
+}
+
+func (e *ExecutionContext) retainNestedShellParent(parent *State) (func(), error) {
+	budget, err := e.newRetainedPathBudget([]*pathResult{{state: parent}})
+	if err != nil {
+		return nil, err
+	}
+	return e.retainPathBudget(budget, 0, 0)
+}
+
+func (e *ExecutionContext) evaluateWithRetainedPaths(run func() ([]*pathResult, error), groups ...[]*pathResult) ([]*pathResult, error) {
+	budget, err := e.newRetainedPathBudget(groups...)
+	if err != nil {
+		return nil, err
+	}
+	release, err := e.retainPathBudget(budget, 0, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return run()
+}
+
 func (e *ExecutionContext) newRetainedPathBudget(groups ...[]*pathResult) (*retainedPathBudget, error) {
 	budget := &retainedPathBudget{}
 	index := 0
@@ -647,7 +692,7 @@ func (e *ExecutionContext) checkRepeatedPathMaterialization(path *pathResult, co
 func (e *ExecutionContext) retainedAuxiliaryBytes(maximum int) (int, bool) {
 	total, ok := materialize.Add(0, e.variableRollbackBytes, maximum)
 	if ok {
-		total, ok = materialize.Add(total, e.nestedShellBytes, maximum)
+		total, ok = materialize.Add(total, e.retainedScopeBytes, maximum)
 	}
 	if ok && e.candidates != nil {
 		total, ok = materialize.Add(total, e.candidates.dynamicBytes, maximum)

@@ -9,6 +9,204 @@ import (
 	"testing"
 )
 
+func TestSimulatorInputTransformsAdvanceConsumedStdin(t *testing.T) {
+	for _, test := range []*struct {
+		name, source, stdin, want string
+	}{
+		{name: "base64 encode", source: `base64 >/dev/null`, stdin: "abc\n", want: "1:"},
+		{name: "base64 decode", source: `base64 -d >/dev/null`, stdin: "YWJjCg==", want: "1:"},
+		{name: "base64 invalid data", source: `base64 -d >/dev/null`, stdin: "%%%\n", want: "1:"},
+		{name: "base64 invalid option", source: `base64 --unsupported`, stdin: "abc\n", want: "0:abc"},
+		{name: "base64 unsupported file", source: `base64 file`, stdin: "abc\n", want: "0:abc"},
+		{name: "rev", source: `rev >/dev/null`, stdin: "abc\n", want: "1:"},
+		{name: "rev unsupported file", source: `rev file`, stdin: "abc\n", want: "0:abc"},
+		{name: "base64 in subshell", source: `(base64 >/dev/null)`, stdin: "abc\n", want: "1:"},
+		{name: "rev in substitution", source: `value=$(rev)`, stdin: "abc\n", want: "1:"},
+		{name: "redirected input does not consume parent", source: `base64 <<< temporary >/dev/null`, stdin: "abc\n", want: "0:abc"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls []string
+			simulator := mustBuildSimulator(t, "lark-cli", recordFirstArgument(t, &calls))
+			err := simulator.Simulate(context.Background(), &SimulationRequest{
+				Source: test.source + `; read value; lark-cli "$?:$value"`,
+				Stdin:  []byte(test.stdin),
+			})
+			if err != nil || !reflect.DeepEqual(calls, []string{test.want}) {
+				t.Fatalf("calls=%q, error=%v; want %q", calls, err, test.want)
+			}
+		})
+	}
+}
+
+func TestSimulatorUnsetArraySubscripts(t *testing.T) {
+	for _, test := range []*struct{ source, want string }{
+		{`a=(zero one two); i=1; unset 'a[i]'; lark-cli "${!a[*]}:${a[*]}:$?"`, "0 2:zero two:0"},
+		{`a=(zero one two); i=0; unset 'a[i+1]'; lark-cli "${!a[*]}"`, "0 2"},
+		{`a=(zero one two); i=1; unset 'a[i++]'; lark-cli "$i:${!a[*]}"`, "2:0 2"},
+		{`a=([2]=two [5]=five); unset 'a[2]'; lark-cli "${#a[@]}:${!a[*]}:${a[*]}"`, "1:5:five"},
+		{`a=(zero one); unset 'a[@]'; lark-cli "${#a[@]}:${a[*]}"`, "0:"},
+		{`a=(zero one); unset 'a[*]'; a[3]=three; lark-cli "${#a[@]}:${!a[*]}"`, "1:3"},
+		{`a=(zero one); readonly a; unset 'a[@]'; lark-cli "$?:${a[*]}"`, "1:zero one"},
+		{`a=(zero one); unset 'a[1/0]'; lark-cli "$?:${a[*]}"`, "1:zero one"},
+	} {
+		t.Run(test.source, func(t *testing.T) { requireFirstArguments(t, test.source, []string{test.want}) })
+	}
+}
+
+func TestSimulatorExecPreservesArgvZero(t *testing.T) {
+	for _, test := range []*struct{ source, want string }{
+		{`exec -a fake bash -c 'lark-cli "$0"'`, "fake"},
+		{`exec -l bash -c 'lark-cli "$0"'`, "-bash"},
+		{`exec -a fake -l bash -c 'lark-cli "$0"'`, "-fake"},
+		{`exec -l -a fake bash -c 'lark-cli "$0"'`, "-fake"},
+		{`exec -a '' bash -c 'lark-cli "<$0>"'`, "<>"},
+		{`exec -a fake bash -c 'lark-cli "$0"' explicit`, "explicit"},
+		{`exec -a fake bash -c 'bash -c '\''lark-cli "$0"'\'''`, "bash"},
+	} {
+		t.Run(test.source, func(t *testing.T) { requireFirstArguments(t, test.source, []string{test.want}) })
+	}
+}
+
+func TestSimulatorUnsetUnknownIndexPreservesUncertainty(t *testing.T) {
+	var calls []*Invocation
+	simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, _ *CommandContext, invocation *Invocation) (*CommandResult, error) {
+		calls = append(calls, invocation)
+		return &CommandResult{}, nil
+	})
+	err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `a=(zero one); i=$(missing); unset 'a[i]'; lark-cli "${a[0]}" "${a[1]}"; unset 'a[@]'; lark-cli "${#a[@]}"`})
+	if err != nil || len(calls) != 2 {
+		t.Fatalf("calls=%v, error=%v", calls, err)
+	}
+	for _, argument := range calls[0].Args {
+		if argument.Kind != ArgumentUnresolved {
+			t.Fatalf("unknown deletion exposed a concrete element: %+v", argument)
+		}
+	}
+	if len(calls[1].Args) != 1 || calls[1].Args[0].Kind != ArgumentString || calls[1].Args[0].Value != "0" {
+		t.Fatalf("clearing the entire array must restore certainty: %+v", calls[1].Args)
+	}
+}
+
+func TestSimulatorCatContinuesAfterDirectoryOperands(t *testing.T) {
+	for _, test := range []*struct{ name, source, want string }{
+		{name: "directory before file", source: `printf ok > file; output=$(cat / file); lark-cli "$?:$output"`, want: "1:ok"},
+		{name: "directory between files", source: `printf a > first; printf b > second; output=$(cat first / second / first); lark-cli "$?:$output"`, want: "1:aba"},
+		{name: "directory before stdin", source: `output=$(cat / - -); code=$?; read remainder; lark-cli "$code:$output:$?:$remainder"`, want: "1:input:1:"},
+		{name: "known failure dominates unknown operand", source: `output=$(cat missing /); lark-cli "$?"`, want: "1"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			var calls []string
+			simulator := mustBuildSimulator(t, "lark-cli", recordFirstArgument(t, &calls))
+			err := simulator.Simulate(context.Background(), &SimulationRequest{Source: test.source, Stdin: []byte("input\n")})
+			if err != nil || !reflect.DeepEqual(calls, []string{test.want}) {
+				t.Fatalf("calls=%q, error=%v; want %q", calls, err, test.want)
+			}
+		})
+	}
+}
+
+func TestSimulatorNegativeShiftPreservesArguments(t *testing.T) {
+	requireFirstArguments(t, `set -- a b; shift -1; lark-cli "$?:$#:$1:$2"`, []string{"1:2:a:b"})
+	requireFirstArguments(t, `set -- a b; shift 3; lark-cli "$?:$#:$1:$2"`, []string{"1:2:a:b"})
+	requireFirstArguments(t, `set -- a b; shift 1; lark-cli "$?:$#:$1"`, []string{"0:1:b"})
+}
+
+func TestSimulatorMalformedTestHasConcreteFailure(t *testing.T) {
+	for _, expression := range []string{`[ x -eq ]`, `test x -eq`, `test -n x y`, `test a unsupported b`, `test '!' x -eq`} {
+		t.Run(expression, func(t *testing.T) {
+			requireFirstArguments(t, `if `+expression+`; then lark-cli unexpected; else lark-cli "$?"; fi; lark-cli after`, []string{"2", "after"})
+		})
+	}
+}
+
+func TestSimulatorTestOperandArity(t *testing.T) {
+	for _, test := range []*struct{ expression, want string }{
+		{`test '!' = x`, "1"},
+		{`test '!' = '!'`, "0"},
+		{`test '(' x ')'`, "0"},
+		{`test '(' '' ')'`, "1"},
+		{`test '!' x = x`, "1"},
+		{`test '!' -n ''`, "0"},
+	} {
+		t.Run(test.expression, func(t *testing.T) {
+			requireFirstArguments(t, test.expression+`; lark-cli "$?"`, []string{test.want})
+		})
+	}
+	// Valid but unmodelled host predicates remain unknown, not syntax errors.
+	for _, expression := range []string{`test -t 0`, `test a -nt b`} {
+		requireFirstArguments(t, `if `+expression+`; then lark-cli yes; else lark-cli no; fi`, []string{"yes", "no"})
+	}
+}
+
+func TestSimulatorCharacterDevicePredicatesUseVirtualPathKind(t *testing.T) {
+	for _, expression := range []string{`test -c`, `[[ -c`} {
+		for _, test := range []*struct{ path, want string }{{"file", "no"}, {"/", "no"}, {"/dev/null", "yes"}} {
+			condition := expression + " " + test.path
+			if strings.HasPrefix(expression, "[[") {
+				condition += " ]]"
+			}
+			t.Run(condition, func(t *testing.T) {
+				requireFirstArguments(t, `printf data > file; if `+condition+`; then lark-cli yes; else lark-cli no; fi`, []string{test.want})
+			})
+		}
+	}
+}
+
+func TestSimulatorEmptyCommandExpansion(t *testing.T) {
+	for _, test := range []*struct{ name, source, want string }{
+		{"unquoted empty variable", `empty=; false; $empty; lark-cli "$?"`, "0"},
+		{"empty substitution", `$(true); lark-cli "$?"`, "0"},
+		{"failed empty substitution", `$(false); lark-cli "$?"`, "1"},
+		{"assignment without executable", `empty=; value=kept $empty; lark-cli "$?:$value"`, "0:kept"},
+		{"substitution assignment status", `value=$(false) $(true); lark-cli "$?:$value"`, "1:"},
+		{"redirection without executable", `empty=; $empty > file; lark-cli "$?:$(cat file)"`, "0:"},
+		{"quoted empty executable", `empty=; "$empty"; lark-cli "$?"`, "127"},
+		{"temporary empty executable assignment", `empty=; value=outer; value=inner "$empty"; lark-cli "$?:$value"`, "127:outer"},
+		{"later field supplies executable", `empty=; $empty lark-cli reached`, "reached"},
+	} {
+		t.Run(test.name, func(t *testing.T) { requireFirstArguments(t, test.source, []string{test.want}) })
+	}
+}
+
+func TestSimulatorUnknownIFSDoesNotTaintLiteralExpansion(t *testing.T) {
+	for _, test := range []*struct{ name, source, want string }{
+		{"scalar copy", `copy=$value; lark-cli "$copy"`, "a:b"},
+		{"substitution assignment", `copy=$(printf '%s' a:b); lark-cli "$copy"`, "a:b"},
+		{"positional count assignment", `set -- one two; copy=${#*}; lark-cli "$copy"`, "2"},
+		{"quoted positional count", `set -- one two; lark-cli "${#*}"`, "2"},
+		{"quoted array count", `values=(a b); lark-cli "${#values[*]}"`, "2"},
+		{"test operands", `if [[ $value == a:b ]]; then lark-cli yes; else lark-cli no; fi`, "yes"},
+		{"case subject", `case $value in a:b) lark-cli yes;; *) lark-cli no;; esac`, "yes"},
+		{"case pattern", `pattern='a:*'; case a:b in $pattern) lark-cli yes;; *) lark-cli no;; esac`, "yes"},
+		{"inactive star join", `set -- one two; lark-cli "${value:-$*}"`, "a:b"},
+		{"nested star join does not taint concrete output", `set -- one two; lark-cli "$(joined=$*; printf concrete)"`, "concrete"},
+		{"unknown glob ignore in assignment", `GLOBIGNORE=$(unknown); value='*'; copy=$value; lark-cli "$copy"`, "*"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			requireFirstArguments(t, `value=a:b; IFS=$(unknown); `+test.source, []string{test.want})
+		})
+	}
+}
+
+func TestSimulatorLiteralStarJoinStillDependsOnUnknownIFS(t *testing.T) {
+	for _, source := range []string{`joined=$*`, `joined="${values[*]}"`, `unset value; joined=${value:-$*}`} {
+		t.Run(source, func(t *testing.T) {
+			calls := 0
+			simulator := mustBuildSimulator(t, "lark-cli", func(_ context.Context, command *CommandContext, invocation *Invocation) (*CommandResult, error) {
+				calls++
+				if len(invocation.Args) != 1 || invocation.Args[0].Kind != ArgumentUnresolved {
+					t.Fatalf("arguments=%#v, want unknown joined value", invocation.Args)
+				}
+				return commandResultForTest(command, nil, nil, 0), nil
+			})
+			err := simulator.Simulate(context.Background(), &SimulationRequest{Source: `set -- a b; values=(a b); IFS=$(unknown); ` + source + `; lark-cli "$joined"`})
+			if err != nil || calls != 1 {
+				t.Fatalf("calls=%d, error=%v", calls, err)
+			}
+		})
+	}
+}
+
 func TestSimulatorUserHandlerOverridesShellBuiltin(t *testing.T) {
 	var calls []string
 	simulator := mustBuildSimulator(t, "echo", recordFirstArgument(t, &calls))

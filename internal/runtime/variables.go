@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"fmt"
+	"maps"
 	"math"
 	"sort"
 	"strconv"
@@ -343,35 +344,12 @@ func (v *variables) ensureMutable() {
 	if !v.shared {
 		return
 	}
-	cloned := make(map[string]expand.Variable, len(v.data))
-	for name, value := range v.data {
-		cloned[name] = cloneVariable(value)
-	}
-	var unknown map[string]struct{}
-	if len(v.unknown) != 0 {
-		unknown = make(map[string]struct{}, len(v.unknown))
-		for name := range v.unknown {
-			unknown[name] = struct{}{}
-		}
-	}
-	var versions map[string]uint64
-	if len(v.versions) != 0 {
-		versions = make(map[string]uint64, len(v.versions))
-		for name, version := range v.versions {
-			versions[name] = version
-		}
-	}
-	var indexed map[string]map[int]struct{}
-	if len(v.indexed) != 0 {
-		indexed = make(map[string]map[int]struct{}, len(v.indexed))
-		for name, slots := range v.indexed {
-			indexed[name] = cloneIndexedSlots(slots)
-		}
-	}
-	v.data = cloned
-	v.unknown = unknown
-	v.versions = versions
-	v.indexed = indexed
+	// Get/lookup and put clone mutable values. No stored array or slot map is
+	// edited in place, so unrelated values can remain shared between tables.
+	v.data = maps.Clone(v.data)
+	v.unknown = maps.Clone(v.unknown)
+	v.versions = maps.Clone(v.versions)
+	v.indexed = maps.Clone(v.indexed)
 	v.shared = false
 }
 

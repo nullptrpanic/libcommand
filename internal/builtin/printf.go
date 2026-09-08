@@ -91,7 +91,9 @@ func executePrintf(ctx context.Context, shell *runtime.CommandContext, invocatio
 		shell.RecordVariableRollback(variableName)
 		value := &expand.Variable{Set: true, Kind: expand.String, Str: output.String()}
 		if err := shell.AssignVariable(variableName, value, false); err != nil {
-			return commandResult(shell, nil, []byte(fmt.Sprintf("printf: %v\n", err)), 1), nil
+			// Identifier and readonly failures were handled before formatting.
+			// A materialization failure must not become an ordinary exit 1.
+			return nil, err
 		}
 		return commandResult(shell, nil, []byte(diagnostics.String()), exitCode), nil
 	}

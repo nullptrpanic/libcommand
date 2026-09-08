@@ -27,10 +27,7 @@ func init() {
 }
 
 func executeSet(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
-	args, concrete := concreteArguments(invocation)
-	if !concrete {
-		return unresolvedStderrCommandResult(shell, 1), nil
-	}
+	args := invocation.Args
 	if len(args) == 0 {
 		stdout, stderr, exitCode, stdoutUnknown := queryShellVariables(shell)
 		return uncertainCommandResult(shell, stdout, stderr, exitCode, stdoutUnknown, false, false), nil
@@ -38,7 +35,10 @@ func executeSet(_ context.Context, shell *runtime.CommandContext, invocation *ru
 	setArguments := false
 	remaining := args
 	for len(remaining) > 0 {
-		argument := remaining[0]
+		if remaining[0].Kind == runtime.ArgumentUnresolved {
+			return unresolvedStderrCommandResult(shell, 1), nil
+		}
+		argument := remaining[0].Value
 		if argument == "--" {
 			setArguments = true
 			remaining = remaining[1:]
@@ -62,8 +62,11 @@ func executeSet(_ context.Context, shell *runtime.CommandContext, invocation *ru
 				if len(remaining) == 1 {
 					return queryNamedShellOptions(shell, enabled), nil
 				}
-				if !shell.SetOption(remaining[1], enabled) {
-					return commandResult(shell, nil, []byte(fmt.Sprintf("set: %s: invalid option name\n", remaining[1])), 2), nil
+				if remaining[1].Kind == runtime.ArgumentUnresolved {
+					return unresolvedStderrCommandResult(shell, 1), nil
+				}
+				if !shell.SetOption(remaining[1].Value, enabled) {
+					return commandResult(shell, nil, []byte(fmt.Sprintf("set: %s: invalid option name\n", remaining[1].Value)), 2), nil
 				}
 				remaining = remaining[1:]
 				break
@@ -75,7 +78,7 @@ func executeSet(_ context.Context, shell *runtime.CommandContext, invocation *ru
 		remaining = remaining[1:]
 	}
 	if setArguments {
-		shell.ReplacePositionalArguments(remaining)
+		shell.ReplaceTypedPositionalArguments(remaining)
 	}
 	return commandResult(shell, nil, nil, 0), nil
 }

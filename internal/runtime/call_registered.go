@@ -8,11 +8,11 @@ import (
 )
 
 func (e *ExecutionContext) evaluateCallStatement(s *State, call *syntax.CallExpr) ([]*pathResult, error) {
-	if len(call.Args) == 0 {
-		return e.evaluateAssignmentCall(s, call)
-	}
 	if status := e.reserveExecutionSteps(s, 1, sourceLocation(call)); status != StatusCompleted {
 		return []*pathResult{{state: s, status: status}}, nil
+	}
+	if len(call.Args) == 0 {
+		return e.evaluateAssignmentCall(s, call)
 	}
 	arguments, err := e.expandCallArguments(s, call.Args)
 	if err != nil {
@@ -23,13 +23,21 @@ func (e *ExecutionContext) evaluateCallStatement(s *State, call *syntax.CallExpr
 		return []*pathResult{{state: s, status: result.status}}, resultErr
 	}
 	if len(arguments) == 0 {
-		return e.unresolvedPath(s, "command name depends on unresolved command output", sourceLocation(call.Args[0])), nil
+		return e.evaluateAssignmentCall(s, call)
 	}
 	if arguments[0].Kind == ArgumentUnresolved {
 		return e.evaluateExpandedCommand(s, call, call, "", arguments[1:], call)
 	}
 	if arguments[0].Value == "" {
-		return e.unresolvedPath(s, "command name expanded to an empty value", sourceLocation(call)), nil
+		saved, err := e.applyTemporaryAssignments(s, call.Assigns)
+		if err != nil {
+			return e.pathsFromEvaluationError(s, err, sourceLocation(call))
+		}
+		s.setExitCode(127)
+		status := e.appendStreams(s, nil, []byte(": command not found\n"), false, false, sourceLocation(call))
+		paths := []*pathResult{{state: s, status: status}}
+		restoreTemporaryAssignments(paths, saved)
+		return paths, nil
 	}
 	return e.evaluateExpandedCommand(s, call, call, arguments[0].Value, arguments[1:], call)
 }
@@ -40,17 +48,7 @@ func (e *ExecutionContext) evaluateExpandedCommand(s *State, source syntax.Node,
 		assignments = call.Assigns
 	}
 	if function := s.functions[name]; function != nil {
-		if hasUnresolvedArguments(arguments) {
-			if call != nil {
-				for _, word := range call.Args[1:] {
-					if wordHasHostUnknown(s, word) {
-						return e.unresolvedPath(s, "function argument depends on host runtime state", sourceLocation(source)), nil
-					}
-				}
-			}
-			return e.unresolvedPath(s, "function argument depends on unresolved command output", sourceLocation(source)), nil
-		}
-		return e.evaluateFunctionCallAfterStep(s, source, assignments, function, concreteArgumentValues(arguments))
+		return e.evaluateFunctionCallAfterStep(s, source, assignments, function, arguments)
 	}
 	definition := e.lookupCommandDefinition(name)
 	if !commandDefinitionExecutable(definition) {
@@ -63,21 +61,8 @@ func (e *ExecutionContext) evaluateExpandedCommand(s *State, source syntax.Node,
 	if assignmentErr != nil {
 		return e.pathsFromEvaluationError(s, assignmentErr, sourceLocation(source))
 	}
-	input, _ := s.stdin.Data()
-	invocation, status, invocationErr := e.commandInvocation(
-		s,
-		name,
-		arguments,
-		input,
-		sourceLocation(source),
-		definition.Builtin && !definition.UserOverride,
-	)
-	if invocationErr != nil || status != StatusCompleted {
-		paths := []*pathResult{{state: s, status: status}}
-		restoreTemporaryAssignments(paths, saved)
-		return paths, invocationErr
-	}
-	paths, commandErr := e.invokeCommand(s, sourceLocation(source), commandSyntax, definition.Command, invocation)
+	invocation := &Invocation{Name: name, Args: arguments}
+	paths, commandErr := e.invokeCommand(s, sourceLocation(source), commandSyntax, definition, invocation, nil, nil)
 	if definition.RestoreAssignments {
 		restoreTemporaryAssignmentsAlways(paths, saved)
 	} else {
@@ -87,9 +72,6 @@ func (e *ExecutionContext) evaluateExpandedCommand(s *State, source syntax.Node,
 }
 
 func (e *ExecutionContext) evaluateAssignmentCall(s *State, call *syntax.CallExpr) ([]*pathResult, error) {
-	if status := e.reserveExecutionSteps(s, 1, sourceLocation(call)); status != StatusCompleted {
-		return []*pathResult{{state: s, status: status}}, nil
-	}
 	if err := e.applyAssignments(s, call.Assigns, expand.Unknown, false); err != nil {
 		return e.pathsFromEvaluationError(s, err, sourceLocation(call))
 	}

@@ -215,6 +215,13 @@ and exit status propagate through supported assignments, substitutions,
 pipelines, redirections, virtual files, and builtin commands. A branch is
 created only when control flow must observe an unknown outcome.
 
+A known function body, sourced file, or child Shell source can still execute
+when some positional arguments are unresolved. Each position retains its own
+certainty through `"$@"`, `shift`, and `set --`; an unknown value does not make
+the argument count unknown. An unknown script source or option is not replaced
+with fabricated executable text. Unknown list cardinality still uses the
+representative-path model described below.
+
 For example:
 
 ```bash
@@ -332,6 +339,13 @@ same registry. A middleware may inspect or reject a call, alter its result, or
 continue to `next` at most once; it has the same concurrency and lifetime
 obligations as a `Command`.
 
+Middleware receives the exported environment and typed expanded arguments for
+default builtins as well as caller commands. Parser-special declarations and
+`let` prepare their Shell operands once before the chain; their builtin
+implementations reuse those values. Arithmetic expansions and substitutions
+are not repeated for observation. Compound declarations retain the existing
+syntax-aware representation available through `CommandSyntax`.
+
 The default registry includes common Shell builtins and deterministic
 in-process helpers:
 
@@ -434,6 +448,11 @@ runtime path construction:
   `Redirect.Unresolved`
 - virtual filesystem, input, option, lookup, arithmetic, and nested-execution
   operations exposed by `CommandContext`
+- `Argv0` and `CommandResult.WithArgv0` for preserving `exec -a/-l` argument
+  zero without changing command lookup
+- `TypedPositionalArguments`, `ReplaceTypedPositionalArguments`, and
+  `CommandResult.WithArguments` for forwarding unresolved positions into
+  `Source` or `RunShell`; the existing string-based APIs remain available
 - `Output` and `Result` for one command outcome; the output builder defaults to
   resolved empty stdout/stderr and resolved exit code zero
 - `ForkState`, `NewResult`, and `AddOutput` for commands with multiple possible
@@ -445,6 +464,15 @@ is included in that budget. Commands must not retain `CommandContext` or
 `State` pointers after returning. Input byte slices returned by `Input` or
 `ConsumeInput` are caller-owned copies, and `SetInput` also copies its input,
 so a command cannot mutate another retained path through a shared buffer.
+
+Virtual output is applied when a command produces it, so later statements
+inside the same redirected block can read the updated file. `exec` without a
+target persists its own numeric FD bindings; temporary redirections restore
+only the bindings owned by that scope. Commands can use `PersistRedirections`
+for the same behavior. Duplicated input FDs advance together, and inherited
+input consumption is reconciled after nested execution. These are virtual
+streams, never host descriptors; independent OS file offsets and arbitrary
+stdout/stderr interleaving remain outside the supported model.
 
 Result behavior is explicit:
 
@@ -546,6 +574,11 @@ limit. Parser internals, Go runtime overhead, and allocations made inside a
 handler before it returns cannot be hard-limited in process. For untrusted
 Bash, combine these budgets and context deadlines with process-level isolation
 appropriate to the deployment.
+
+Accounting includes suspended parent states, retained siblings, virtual FD
+input/restoration state, and prepared command operands. Output appends reuse
+path-owned capacity, and copy-on-write tables share unchanged immutable
+payloads; a mutation copies the affected data rather than every file or array.
 
 ## Tracing and Playground
 

@@ -21,10 +21,13 @@ func (e *ExecutionContext) evaluateWhile(s *State, clause *syntax.WhileClause) (
 	completed := make([]*pathResult, 0, 1)
 	reentered := false
 	for len(active) > 0 {
-		conditionPaths, err := e.evaluateStatementsWithoutErrexit(active, clause.Cond)
+		conditionPaths, err := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+			return e.evaluateStatementsWithoutErrexit(active, clause.Cond)
+		}, completed)
 		if err != nil {
 			return append(completed, conditionPaths...), err
 		}
+		active = nil
 		bodyPaths := make([]*pathResult, 0, len(conditionPaths))
 		exitPaths := make([]*pathResult, 0, len(conditionPaths))
 		for _, conditionPath := range conditionPaths {
@@ -32,11 +35,18 @@ func (e *ExecutionContext) evaluateWhile(s *State, clause *syntax.WhileClause) (
 				exitPaths = append(exitPaths, conditionPath)
 				continue
 			}
+			if conditionPath.state.signal != signalNone {
+				e.collectLoopContinuation(&active, &completed, conditionPath)
+				continue
+			}
 			resolvedPaths, resolveErr := e.resolveExitStatus(conditionPath, sourceLocation(clause))
 			if resolveErr != nil {
 				return append(completed, resolvedPaths...), resolveErr
 			}
 			for _, resolved := range resolvedPaths {
+				if e.collectInactivePath(&completed, resolved) {
+					continue
+				}
 				exitCode, _ := resolved.state.exitStatus.Data()
 				matched := exitCode == 0
 				if clause.Until {
@@ -52,10 +62,10 @@ func (e *ExecutionContext) evaluateWhile(s *State, clause *syntax.WhileClause) (
 			}
 		}
 		completed = append(completed, exitPaths...)
-		if err := e.checkPathGroupsMaterialization(0, sourceLocation(clause), completed, bodyPaths); err != nil {
+		if err := e.checkPathGroupsMaterialization(0, sourceLocation(clause), completed, active, bodyPaths); err != nil {
 			return append(completed, bodyPaths...), err
 		}
-		if len(bodyPaths) == 0 {
+		if len(bodyPaths) == 0 && len(active) == 0 {
 			break
 		}
 		if reentered && e.trace != nil {
@@ -66,11 +76,12 @@ func (e *ExecutionContext) evaluateWhile(s *State, clause *syntax.WhileClause) (
 			}
 		}
 		reentered = true
-		bodyResults, err := e.evaluateStatements(bodyPaths, clause.Do)
+		bodyResults, err := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+			return e.evaluateStatements(bodyPaths, clause.Do)
+		}, completed, active)
 		if err != nil {
 			return append(completed, bodyResults...), err
 		}
-		active = active[:0]
 		for _, bodyPath := range bodyResults {
 			if bodyPath.status == StatusCompleted {
 				exitCode, exitUnresolved := bodyPath.state.exitStatus.Data()
@@ -95,6 +106,11 @@ func (e *ExecutionContext) evaluateWhile(s *State, clause *syntax.WhileClause) (
 func (e *ExecutionContext) evaluateFor(s *State, clause *syntax.ForClause) (results []*pathResult, err error) {
 	s.loopDepth++
 	defer func() {
+		if len(results) == 0 {
+			// Expansion can suspend this attempt before it produces a path.
+			// The same state is then resumed, so it must leave this scope too.
+			s.loopDepth--
+		}
 		for _, result := range results {
 			result.state.loopDepth--
 		}
@@ -112,7 +128,7 @@ func (e *ExecutionContext) evaluateFor(s *State, clause *syntax.ForClause) (resu
 }
 
 func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, loop *syntax.WordIter) ([]*pathResult, error) {
-	items, expandErr := e.expandWords(s, loop.Items)
+	expansion, expandErr := e.expandFields(s, loop.Items, false)
 	if expandErr != nil {
 		if expansionRequested(expandErr) {
 			return nil, expandErr
@@ -125,7 +141,8 @@ func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, l
 	}
 	unknownItems := false
 	zeroIteration := false
-	if _, unknown := firstUnknownWord(s, loop.Items); unknown {
+	items := expansion.fields
+	if expansion.unknownList {
 		if clause.Select {
 			result := e.unresolved(s, "for item list depends on unresolved command output", sourceLocation(loop))
 			return []*pathResult{{state: s, status: result.status}}, nil
@@ -141,6 +158,9 @@ func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, l
 		s.setExitCode(1)
 		status := e.appendStreams(s, nil, []byte(fmt.Sprintf("%s: readonly variable\n", loop.Name.Value)), false, false, sourceLocation(loop))
 		return []*pathResult{{state: s, status: status}}, nil
+	}
+	if clause.Select && hasUnresolvedArguments(expansion.arguments) {
+		return e.unresolvedPath(s, "select item list depends on unresolved command output", sourceLocation(loop)), nil
 	}
 	if clause.Select {
 		return e.evaluateSelect(s, clause, loop, items)
@@ -167,7 +187,7 @@ func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, l
 				Kind:     expand.String,
 				Str:      item,
 			}
-			if unknownItems {
+			if unknownItems || expansion.arguments[itemIndex].Kind == ArgumentUnresolved {
 				current.state.vars.putUnknown(loop.Name.Value, value)
 			} else {
 				current.state.vars.put(loop.Name.Value, value)
@@ -180,7 +200,9 @@ func (e *ExecutionContext) evaluateWordFor(s *State, clause *syntax.ForClause, l
 		if err := e.checkPathGroupsMaterialization(0, sourceLocation(clause), completed, bodyInputs); err != nil {
 			return append(completed, bodyInputs...), err
 		}
-		bodyResults, bodyErr := e.evaluateStatements(bodyInputs, clause.Do)
+		bodyResults, bodyErr := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+			return e.evaluateStatements(bodyInputs, clause.Do)
+		}, completed)
 		if bodyErr != nil {
 			return append(completed, bodyResults...), bodyErr
 		}
@@ -286,7 +308,9 @@ func (e *ExecutionContext) evaluateArithmeticFor(s *State, clause *syntax.ForCla
 		if len(bodyInputs) > 0 {
 			reentered = true
 		}
-		bodyResults, bodyErr := e.evaluateStatements(bodyInputs, clause.Do)
+		bodyResults, bodyErr := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+			return e.evaluateStatements(bodyInputs, clause.Do)
+		}, completed)
 		if bodyErr != nil {
 			return append(completed, bodyResults...), bodyErr
 		}
@@ -366,14 +390,14 @@ func (e *ExecutionContext) evaluateSelect(s *State, clause *syntax.ForClause, lo
 				nodeID := e.trace.currentNodeID(current.state)
 				alternatives := make([]*pathResult, 0, len(items)+2)
 				eof := current.state.clone()
-				eof.stdin = newCertain[[]byte](nil)
+				eof.setInput(newCertain[[]byte](nil))
 				eofStatus := e.finishSelectInput(eof, sourceLocation(clause))
 				eofPath := &pathResult{state: eof, status: eofStatus}
 				alternatives = append(alternatives, eofPath)
 				completed = append(completed, eofPath)
 				for index, item := range items {
 					choice := current.state.clone()
-					choice.stdin = newCertain[[]byte](nil)
+					choice.setInput(newCertain[[]byte](nil))
 					replyAssigned, status := e.assignSelectVariable(choice, "REPLY", expand.Variable{Set: true, Kind: expand.String, Str: strconv.Itoa(index + 1)}, sourceLocation(clause))
 					choicePath := &pathResult{state: choice, status: status}
 					alternatives = append(alternatives, choicePath)
@@ -387,7 +411,7 @@ func (e *ExecutionContext) evaluateSelect(s *State, clause *syntax.ForClause, lo
 					_, _ = e.assignSelectVariable(choice, loop.Name.Value, expand.Variable{Set: true, Kind: expand.String, Str: item}, sourceLocation(clause))
 					bodyInputs = append(bodyInputs, choicePath)
 				}
-				current.state.stdin = newCertain[[]byte](nil)
+				current.state.setInput(newCertain[[]byte](nil))
 				// A non-empty, non-numeric representative covers Bash's invalid-input branch.
 				_, status := e.assignSelectVariable(current.state, "REPLY", expand.Variable{Set: true, Kind: expand.String, Str: "?"}, sourceLocation(clause))
 				alternatives = append(alternatives, current)
@@ -433,7 +457,9 @@ func (e *ExecutionContext) evaluateSelect(s *State, clause *syntax.ForClause, lo
 			return append(paths, bodyInputs...), err
 		}
 
-		bodyResults, err := e.evaluateStatements(bodyInputs, clause.Do)
+		bodyResults, err := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+			return e.evaluateStatements(bodyInputs, clause.Do)
+		}, completed, next)
 		if err != nil {
 			return append(completed, bodyResults...), err
 		}
@@ -459,11 +485,11 @@ func consumeSelectInput(s *State) (string, bool) {
 	}
 	if newline := bytes.IndexByte(input, '\n'); newline >= 0 {
 		line := string(input[:newline])
-		s.stdin = newCertain(input[newline+1:])
+		s.setInput(newCertain(input[newline+1:]))
 		return line, true
 	}
 	line := string(input)
-	s.stdin = newCertain(input[:0])
+	s.setInput(newCertain(input[:0]))
 	return line, true
 }
 

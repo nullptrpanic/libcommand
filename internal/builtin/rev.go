@@ -14,25 +14,28 @@ func init() {
 }
 
 func executeRevCommand(ctx context.Context, command *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
-	output, err := executeRev(ctx, invocation, command.MaxMemoryBytes())
+	output, consumed, err := executeRev(ctx, invocation, command.MaxMemoryBytes())
 	if err != nil {
 		return nil, err
+	}
+	if consumed {
+		command.SetInput(nil, false)
 	}
 	return command.Result(output), nil
 }
 
-func executeRev(ctx context.Context, invocation *runtime.Invocation, maximum int) (*runtime.CommandOutput, error) {
+func executeRev(ctx context.Context, invocation *runtime.Invocation, maximum int) (*runtime.CommandOutput, bool, error) {
 	if err := ctx.Err(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 	if len(invocation.Args) != 0 {
-		return commandOutput(nil, []byte("rev: file operands are not supported\n"), 1), nil
+		return commandOutput(nil, []byte("rev: file operands are not supported\n"), 1), false, nil
 	}
 	if invocation.Unresolved != nil && invocation.Unresolved.Stdin {
-		return unresolvedCommandOutput(), nil
+		return unresolvedCommandOutput(), false, nil
 	}
 	if _, ok := materialize.Add(0, len(invocation.Stdin), maximum); !ok {
-		return nil, materialize.LimitError(maximum)
+		return nil, false, materialize.LimitError(maximum)
 	}
 
 	stdout := make([]byte, 0, len(invocation.Stdin))
@@ -42,19 +45,19 @@ func executeRev(ctx context.Context, invocation *runtime.Invocation, maximum int
 			var err error
 			stdout, err = appendReversedRunes(ctx, stdout, remaining)
 			if err != nil {
-				return nil, err
+				return nil, false, err
 			}
 			break
 		}
 		var err error
 		stdout, err = appendReversedRunes(ctx, stdout, remaining[:lineEnd])
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 		stdout = append(stdout, '\n')
 		remaining = remaining[lineEnd+1:]
 	}
-	return commandOutput(stdout, nil, 0), nil
+	return commandOutput(stdout, nil, 0), true, nil
 }
 
 func appendReversedRunes(ctx context.Context, destination, source []byte) ([]byte, error) {

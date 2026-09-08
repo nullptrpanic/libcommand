@@ -102,7 +102,7 @@ func (e *ExecutionContext) testTruth(s *State, expression syntax.TestExpr) (trut
 			s.vars.assignWithCertainty("BASH_REMATCH", expand.Variable{Set: true, Kind: expand.Indexed, List: matches}, false)
 			return truthFromBool(matches != nil), nil
 		case syntax.TsMatchShort, syntax.TsMatch:
-			rightUnknown := wordCertainty(s, rightWord) != 0
+			rightUnknown := literalWordCertainty(s, rightWord) != 0
 			right, err := e.patternValue(s, rightWord)
 			if err != nil {
 				return truthUnknown, err
@@ -116,7 +116,7 @@ func (e *ExecutionContext) testTruth(s *State, expression syntax.TestExpr) (trut
 			}
 			return truthFromBool(regexp.MustCompile(regularExpression).MatchString(left)), nil
 		case syntax.TsNoMatch:
-			rightUnknown := wordCertainty(s, rightWord) != 0
+			rightUnknown := literalWordCertainty(s, rightWord) != 0
 			right, err := e.patternValue(s, rightWord)
 			if err != nil {
 				return truthUnknown, err
@@ -236,7 +236,7 @@ func (e *ExecutionContext) virtualFileTestTruth(s *State, operator syntax.UnTest
 	}
 	if contents, exists := s.fs.files[resolved]; exists {
 		switch operator {
-		case syntax.TsDirect, syntax.TsExec:
+		case syntax.TsDirect, syntax.TsExec, syntax.TsCharSp:
 			return truthFalse, nil
 		case syntax.TsNoEmpty:
 			if s.fs.fileUnknown(resolved) {
@@ -253,7 +253,7 @@ func (e *ExecutionContext) virtualFileTestTruth(s *State, operator syntax.UnTest
 		switch operator {
 		case syntax.TsExists, syntax.TsDirect, syntax.TsRead, syntax.TsWrite, syntax.TsExec:
 			return truthTrue, nil
-		case syntax.TsRegFile, syntax.TsNoEmpty:
+		case syntax.TsRegFile, syntax.TsNoEmpty, syntax.TsCharSp:
 			return truthFalse, nil
 		default:
 			return truthUnknown, nil
@@ -263,7 +263,7 @@ func (e *ExecutionContext) virtualFileTestTruth(s *State, operator syntax.UnTest
 }
 
 func (e *ExecutionContext) testWord(s *State, word *syntax.Word) (string, bool, error) {
-	certainty := wordCertainty(s, word)
+	certainty := literalWordCertainty(s, word)
 	value, err := e.literalValue(s, word)
 	if certainty.hostUnknown() {
 		if expansionRequested(err) {

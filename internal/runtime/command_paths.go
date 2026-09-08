@@ -8,19 +8,67 @@ import (
 	"mvdan.cc/sh/v3/syntax"
 )
 
-func (e *ExecutionContext) invokeCommand(state *State, source *location, commandSyntax syntax.Command, command Command, invocation *Invocation) (paths []*pathResult, err error) {
+func (e *ExecutionContext) invokeCommand(state *State, source *location, commandSyntax syntax.Command, definition *CommandDefinition, invocation *Invocation, argv0 *string, redirectionScope *redirectionPlan) (paths []*pathResult, err error) {
 	var contextSyntax syntax.Command
 	switch commandSyntax.(type) {
 	case *syntax.DeclClause, *syntax.LetClause:
 		contextSyntax = commandSyntax
 	}
 	commandContext := &CommandContext{
-		execution: e,
-		state:     state,
-		source:    source,
-		syntax:    contextSyntax,
-		redirects: cloneRedirects(e.redirects),
+		execution:        e,
+		state:            state,
+		source:           source,
+		syntax:           contextSyntax,
+		argv0:            invocation.Name,
+		redirects:        state.commandRedirects(e.redirects),
+		redirectionScope: redirectionScope,
 	}
+	if commandSyntax != nil && len(state.redirectionFrames) != 0 {
+		frame := state.redirectionFrames[len(state.redirectionFrames)-1]
+		if frame.command == commandSyntax {
+			commandContext.redirectionScope = frame
+		}
+	}
+	if argv0 != nil {
+		commandContext.argv0 = *argv0
+	}
+	prepared := definition.Prepare != nil && contextSyntax != nil
+	if prepared {
+		snapshot := state.clone()
+		if prepareErr := definition.Prepare(commandContext, invocation); prepareErr != nil {
+			*state = *snapshot
+			if e.releaseExecutionStepOnSubstitution(prepareErr) {
+				return nil, prepareErr
+			}
+			return e.pathsFromEvaluationError(state, prepareErr, source)
+		}
+		if commandContext.expansions != nil {
+			commandContext.expansions.ready = true
+		}
+	}
+	internal := definition.Builtin && !definition.UserOverride && !definition.Observed
+	if prepared || !internal {
+		additional := 0
+		if commandContext.expansions != nil {
+			additional = commandContext.expansions.bytes
+		}
+		if !internal {
+			input, _ := state.stdin.Data()
+			bytes, ok := commandInvocationMaterialization(state, invocation.Name, invocation.Args, input)
+			if !ok {
+				return e.pathsFromEvaluationError(state, materialize.LimitError(e.config.MaxMemoryBytes), source)
+			}
+			additional = addRetainedBytes(additional, bytes)
+		} else {
+			for _, argument := range invocation.Args {
+				additional = addRetainedBytes(additional, materialize.EntryBytes+len(argument.Value))
+			}
+		}
+		if err := e.checkPathsMaterialization([]*pathResult{{state: state, status: StatusCompleted}}, additional, source); err != nil {
+			return []*pathResult{{state: state, status: StatusIncomplete}}, err
+		}
+	}
+	populateCommandInvocation(state, invocation, internal)
 	e.trace.commandStarted(e, state, commandSyntax, invocation)
 	var result *CommandResult
 	func() {
@@ -29,7 +77,7 @@ func (e *ExecutionContext) invokeCommand(state *State, source *location, command
 				err = fmt.Errorf("execute command %q panicked: %v", invocation.Name, recovered)
 			}
 		}()
-		result, err = command(e.ctx, commandContext, invocation)
+		result, err = definition.Command(e.ctx, commandContext, invocation)
 	}()
 	applyResult := err == nil
 	if applyResult && result != nil && result.operation == nil && len(result.outputs) > 1 {
@@ -54,6 +102,11 @@ func (e *ExecutionContext) invokeCommand(state *State, source *location, command
 		}
 		e.setIssue(state, err, source)
 		return []*pathResult{{state: state, status: StatusIncomplete}}, err
+	}
+	for _, path := range paths {
+		// A delayed operation can return an already-observed inner status;
+		// the enclosing command still has its own failure semantics.
+		path.failureHandled = false
 	}
 	return paths, nil
 }
@@ -119,17 +172,17 @@ func (c *CommandContext) executeOperation(operation *commandOperation) ([]*pathR
 		status := c.execution.appendOutcome(c.state, result, c.source)
 		return []*pathResult{{state: c.state, status: status}}, err
 	case commandOperationInvoke:
-		return c.executeInvoke(operation.name, operation.arguments, operation.builtinOnly)
+		return c.executeInvoke(operation.name, operation.arguments, operation.builtinOnly, operation.argv0)
 	case commandOperationInvokeEnvironment:
 		return c.executeInvokeWithEnvironment(operation.name, operation.arguments, operation.clearEnvironment, operation.unset, operation.assignments)
 	case commandOperationReplace:
-		return c.executeReplace(operation.name, operation.arguments, operation.clearEnvironment)
+		return c.executeReplace(operation.name, operation.arguments, operation.clearEnvironment, operation.argv0)
 	case commandOperationEvaluate:
 		return c.executeEvaluate(operation.source, operation.name, operation.parseExitCode)
 	case commandOperationSource:
-		return c.executeSource(operation.source, operation.name, operation.sourceArguments)
+		return c.executeSource(operation.source, operation.name, operation.arguments)
 	case commandOperationRunShell:
-		return c.executeRunShell(operation.program)
+		return c.executeRunShell(operation.program, operation.arguments)
 	default:
 		return nil, fmt.Errorf("unsupported command operation %d", operation.kind)
 	}

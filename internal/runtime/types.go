@@ -156,12 +156,12 @@ const (
 type commandOperation struct {
 	kind             commandOperationKind
 	name             string
+	argv0            *string
 	source           string
 	message          string
 	err              error
 	parseExitCode    int
 	arguments        []*Argument
-	sourceArguments  []string
 	builtinOnly      bool
 	clearEnvironment bool
 	unset            []string
@@ -173,6 +173,8 @@ type commandOperation struct {
 // definitions participate only after an exact executable lookup misses.
 type CommandDefinition struct {
 	Command            Command
+	Prepare            func(*CommandContext, *Invocation) error
+	Observed           bool
 	Builtin            bool
 	Candidate          bool
 	RestoreAssignments bool

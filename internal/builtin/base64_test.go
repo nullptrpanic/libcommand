@@ -79,7 +79,7 @@ func TestBase64PreservesContextCancellation(t *testing.T) {
 }
 
 func TestBase64ReportsUnresolvedArgumentsExplicitly(t *testing.T) {
-	result, err := executeBase64(context.Background(), &runtime.Invocation{
+	result, _, err := executeBase64(context.Background(), &runtime.Invocation{
 		Name: "base64",
 		Args: []*runtime.Argument{{Kind: runtime.ArgumentUnresolved}},
 	}, 2<<20)
@@ -90,11 +90,11 @@ func TestBase64ReportsUnresolvedArgumentsExplicitly(t *testing.T) {
 
 func TestBase64HonorsMaterializationLimit(t *testing.T) {
 	encode := &runtime.Invocation{Name: "base64", Stdin: []byte("hello")}
-	result, err := executeBase64(context.Background(), encode, 9)
+	result, _, err := executeBase64(context.Background(), encode, 9)
 	if err != nil || string(result.Stdout.Value) != "aGVsbG8=\n" {
 		t.Fatalf("exact encode result = %#v, error = %v", result, err)
 	}
-	result, err = executeBase64(context.Background(), encode, 8)
+	result, _, err = executeBase64(context.Background(), encode, 8)
 	if result != nil || err == nil || err.Error() != "maximum materialized byte count 8 reached" {
 		t.Fatalf("over encode result = %#v, error = %v", result, err)
 	}
@@ -104,11 +104,11 @@ func TestBase64HonorsMaterializationLimit(t *testing.T) {
 		Args:  []*runtime.Argument{{Kind: runtime.ArgumentString, Value: "-d"}},
 		Stdin: []byte("aGVs\nbG8="),
 	}
-	result, err = executeBase64(context.Background(), decode, 5)
+	result, _, err = executeBase64(context.Background(), decode, 5)
 	if err != nil || string(result.Stdout.Value) != "hello" {
 		t.Fatalf("exact decode result = %#v, error = %v", result, err)
 	}
-	result, err = executeBase64(context.Background(), decode, 4)
+	result, _, err = executeBase64(context.Background(), decode, 4)
 	if result != nil || err == nil || err.Error() != "maximum materialized byte count 4 reached" {
 		t.Fatalf("over decode result = %#v, error = %v", result, err)
 	}
@@ -119,5 +119,6 @@ func runBase64(ctx context.Context, args []string, stdin []byte) (*runtime.Comma
 	for index, argument := range args {
 		arguments[index] = &runtime.Argument{Kind: runtime.ArgumentString, Value: argument}
 	}
-	return executeBase64(ctx, &runtime.Invocation{Name: "base64", Args: arguments, Stdin: stdin}, 2<<20)
+	output, _, err := executeBase64(ctx, &runtime.Invocation{Name: "base64", Args: arguments, Stdin: stdin}, 2<<20)
+	return output, err
 }

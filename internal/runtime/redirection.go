@@ -4,9 +4,13 @@ import (
 	"errors"
 	"fmt"
 	iofs "io/fs"
+	"maps"
+	"math"
+	"sort"
 	"strconv"
 	"strings"
 
+	"github.com/nullptrpanic/libcommand/internal/materialize"
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
 )
@@ -29,7 +33,9 @@ func (e *ExecutionContext) applyOutputTargets(s *State, plan *redirectionPlan, s
 			return nil
 		}
 		if target.file != "" {
-			return s.fs.writeValue(target.file, contents, target.append, unknown)
+			// Opening a non-append target already truncated it. Subsequent
+			// command writes must be visible immediately and retain prior writes.
+			return s.fs.writeValue(target.file, contents, true, unknown)
 		}
 		if target.captureFD == 1 {
 			capturedStdout = append(capturedStdout, contents...)
@@ -40,8 +46,8 @@ func (e *ExecutionContext) applyOutputTargets(s *State, plan *redirectionPlan, s
 		capturedStderrUnknown = capturedStderrUnknown || unknown
 		return nil
 	}
-	stdoutTarget := plan.descriptors[1].output
-	stderrTarget := plan.descriptors[2].output
+	stdoutTarget := descriptorOutput(plan.descriptors, 1)
+	stderrTarget := descriptorOutput(plan.descriptors, 2)
 	if stdoutTarget != nil && stderrTarget != nil && stdoutTarget.id == stderrTarget.id {
 		combined := append(append([]byte(nil), stdout...), stderr...)
 		if err := write(stdoutTarget, combined, stdoutUnknown || stderrUnknown); err != nil {
@@ -56,6 +62,13 @@ func (e *ExecutionContext) applyOutputTargets(s *State, plan *redirectionPlan, s
 		}
 	}
 	return capturedStdout, capturedStderr, capturedStdoutUnknown, capturedStderrUnknown, nil
+}
+
+func descriptorOutput(descriptors map[int]*descriptorTarget, fd int) *outputTarget {
+	if descriptor := descriptors[fd]; descriptor != nil {
+		return descriptor.output
+	}
+	return &outputTarget{id: fd, captureFD: fd}
 }
 
 func (e *ExecutionContext) inputOnlySubstitution(s *State, substitution *syntax.CmdSubst) (*substitutionResult, bool, error) {
@@ -99,16 +112,61 @@ func (e *ExecutionContext) inputOnlySubstitution(s *State, substitution *syntax.
 }
 
 func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.Redirect) (*redirectionPlan, error) {
-	plan := &redirectionPlan{
-		descriptors: map[int]*descriptorTarget{
-			0: {input: cloneUncertainBytes(s.stdin)},
-			1: {output: &outputTarget{id: 1, captureFD: 1}},
-			2: {output: &outputTarget{id: 2, captureFD: 2}},
-		},
+	base := maps.Clone(s.descriptors)
+	if base == nil {
+		base = make(map[int]*descriptorTarget)
+	}
+	if base[0] == nil {
+		base[0] = &descriptorTarget{key: new(byte), input: s.stdin}
+	}
+	if base[1] == nil {
+		base[1] = &descriptorTarget{key: new(byte), output: &outputTarget{id: 1, captureFD: 1}}
+	}
+	if base[2] == nil {
+		base[2] = &descriptorTarget{key: new(byte), output: &outputTarget{id: 2, captureFD: 2}}
+	}
+	input := *base[0]
+	input.input = s.stdin
+	base[0] = &input
+	plan := &redirectionPlan{descriptors: maps.Clone(base), saved: make(map[int]*descriptorTarget), bindings: make(map[int]*byte)}
+	nextTargetID := 3
+	for _, descriptor := range base {
+		if descriptor.output != nil {
+			nextTargetID = max(nextTargetID, descriptor.output.id+1)
+		}
 	}
 	directory, _ := s.dir.Data()
-	nextTargetID := 3
+	maximum := normalizedMaxMemoryBytes(e.config.MaxMemoryBytes)
+	openedBytes, metadataIndex := 0, 0
+	checkPlan := func() error {
+		for _, redirect := range plan.redirects[metadataIndex:] {
+			var ok bool
+			openedBytes, ok = materialize.Add(openedBytes, materialize.EntryBytes+len(redirect.Target), maximum)
+			if !ok {
+				return materialize.LimitError(maximum)
+			}
+		}
+		metadataIndex = len(plan.redirects)
+		if _, ok := materialize.Add(openedBytes, len(plan.descriptors)*materialize.EntryBytes, maximum); !ok {
+			return materialize.LimitError(maximum)
+		}
+		return nil
+	}
+	chargeInput := func(size int) error {
+		var ok bool
+		openedBytes, ok = materialize.Add(openedBytes, size, maximum)
+		if !ok {
+			return materialize.LimitError(maximum)
+		}
+		return nil
+	}
 	for _, redirection := range redirections {
+		if err := e.ctx.Err(); err != nil {
+			return nil, err
+		}
+		if err := checkPlan(); err != nil {
+			return nil, err
+		}
 		fd, err := redirectFD(redirection)
 		if err != nil {
 			return nil, err
@@ -134,9 +192,9 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 			}
 			filename = s.fs.resolve(directory, filename)
 			if isExternalDevicePath(filename) {
-				target := &descriptorTarget{input: newUnresolved[[]byte](nil)}
+				target := &descriptorTarget{input: newUnresolved[[]byte](nil), inputFile: filename}
 				if redirection.Op == syntax.RdrInOut {
-					target.output = &outputTarget{id: nextTargetID, external: true}
+					target.output = &outputTarget{id: nextTargetID, external: true, file: filename}
 					nextTargetID++
 				}
 				plan.descriptors[fd] = target
@@ -155,6 +213,9 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 				unknown = false
 			}
 			target := &descriptorTarget{inputFile: filename}
+			if err := chargeInput(len(contents)); err != nil {
+				return nil, err
+			}
 			if unknown {
 				target.input = newUnresolved(contents)
 			} else {
@@ -175,10 +236,14 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 				return nil, fmt.Errorf("expand here-string redirection: %w", err)
 			}
 			input := newCertain([]byte(value + "\n"))
+			if err := chargeInput(len(value) + 1); err != nil {
+				return nil, err
+			}
 			if unknown {
 				input = newUnresolved([]byte(value + "\n"))
 			}
 			plan.descriptors[fd] = &descriptorTarget{input: input}
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Unresolved: unknown})
 			if fd == 0 {
 				plan.stdinReplaced = true
 			}
@@ -188,10 +253,14 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 				return nil, fmt.Errorf("expand here-document: %w", err)
 			}
 			input := newCertain([]byte(value))
+			if err := chargeInput(len(value)); err != nil {
+				return nil, err
+			}
 			if unknown {
 				input = newUnresolved([]byte(value))
 			}
 			plan.descriptors[fd] = &descriptorTarget{input: input}
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Unresolved: unknown})
 			if fd == 0 {
 				plan.stdinReplaced = true
 			}
@@ -201,26 +270,13 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 				return nil, err
 			}
 			appendMode := redirection.Op == syntax.AppOut
-			var output *outputTarget
-			if unresolved {
-				output = &outputTarget{id: nextTargetID, external: true}
-			} else {
-				filename = s.fs.resolve(directory, filename)
-				if isExternalDevicePath(filename) {
-					output = &outputTarget{id: nextTargetID, external: true}
-				} else {
-					if prepareErr := prepareOutputRedirection(s, filename, appendMode); prepareErr != nil {
-						return nil, prepareErr
-					}
-					output = &outputTarget{id: nextTargetID, file: filename, append: appendMode}
-					if !appendMode {
-						truncateDescriptorInput(plan.descriptors[0], filename)
-					}
-				}
+			output, err := plan.openOutput(s, directory, filename, unresolved, appendMode, nextTargetID)
+			if err != nil {
+				return nil, err
 			}
 			nextTargetID++
 			plan.descriptors[fd] = &descriptorTarget{output: output}
-			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename, Unresolved: unresolved})
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: output.file, Unresolved: unresolved})
 			if fd == 0 {
 				plan.stdinReplaced = true
 			}
@@ -248,22 +304,15 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 			} else if target == "-" {
 				plan.descriptors[fd] = &descriptorTarget{}
 			} else if redirection.N == nil && fd == 1 {
-				filename := s.fs.resolve(directory, target)
-				var output *outputTarget
-				if isExternalDevicePath(filename) {
-					output = &outputTarget{id: nextTargetID, external: true}
-				} else {
-					if prepareErr := prepareOutputRedirection(s, filename, false); prepareErr != nil {
-						return nil, prepareErr
-					}
-					output = &outputTarget{id: nextTargetID, file: filename}
-					truncateDescriptorInput(plan.descriptors[0], filename)
+				output, err := plan.openOutput(s, directory, target, false, false, nextTargetID)
+				if err != nil {
+					return nil, err
 				}
 				nextTargetID++
 				descriptor := &descriptorTarget{output: output}
 				plan.descriptors[1] = descriptor
 				plan.descriptors[2] = descriptor
-				target = filename
+				target = output.file
 			} else {
 				return nil, &redirectionFailure{message: fmt.Sprintf("%s: ambiguous redirect", target)}
 			}
@@ -301,39 +350,241 @@ func (e *ExecutionContext) prepareRedirections(s *State, redirections []*syntax.
 				return nil, err
 			}
 			appendMode := redirection.Op == syntax.AppAll
-			var output *outputTarget
-			if unresolved {
-				output = &outputTarget{id: nextTargetID, external: true}
-			} else {
-				filename = s.fs.resolve(directory, filename)
-				if isExternalDevicePath(filename) {
-					output = &outputTarget{id: nextTargetID, external: true}
-				} else {
-					if prepareErr := prepareOutputRedirection(s, filename, appendMode); prepareErr != nil {
-						return nil, prepareErr
-					}
-					output = &outputTarget{id: nextTargetID, file: filename, append: appendMode}
-					if !appendMode {
-						truncateDescriptorInput(plan.descriptors[0], filename)
-					}
-				}
+			output, err := plan.openOutput(s, directory, filename, unresolved, appendMode, nextTargetID)
+			if err != nil {
+				return nil, err
 			}
 			nextTargetID++
 			descriptor := &descriptorTarget{output: output}
 			plan.descriptors[1] = descriptor
 			plan.descriptors[2] = descriptor
-			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: filename, Unresolved: unresolved})
+			plan.redirects = append(plan.redirects, &Redirect{FD: fd, Operator: redirection.Op.String(), Target: output.file, Unresolved: unresolved})
 		default:
 			return nil, fmt.Errorf("unsupported redirection operator %v", redirection.Op)
 		}
 	}
+	if err := checkPlan(); err != nil {
+		return nil, err
+	}
+	for fd, descriptor := range plan.descriptors {
+		if descriptor == base[fd] {
+			continue
+		}
+		if descriptor.key == nil {
+			descriptor.key = new(byte)
+		}
+		plan.saved[fd] = base[fd]
+		plan.bindings[fd] = descriptor.key
+	}
 	return plan, nil
+}
+
+func (plan *redirectionPlan) openOutput(s *State, directory, filename string, unresolved, appendMode bool, id int) (*outputTarget, error) {
+	if unresolved {
+		return &outputTarget{id: id, external: true}, nil
+	}
+	filename = s.fs.resolve(directory, filename)
+	if isExternalDevicePath(filename) {
+		return &outputTarget{id: id, external: true, file: filename}, nil
+	}
+	if err := prepareOutputRedirection(s, filename, appendMode); err != nil {
+		return nil, err
+	}
+	if !appendMode {
+		plan.truncateInputs(filename)
+	}
+	return &outputTarget{id: id, file: filename, append: appendMode}, nil
+}
+
+// Descriptor tables and targets are immutable between mutations. Forks share
+// them, while descriptor aliases within one path advance together.
+func (s *State) setInput(input *uncertain[[]byte]) {
+	previous := s.stdin
+	s.stdin = input
+	s.updateDescriptorInput(previous, input)
+}
+
+func (s *State) updateDescriptorInput(previous, next *uncertain[[]byte]) {
+	var updated map[int]*descriptorTarget
+	for fd, descriptor := range s.descriptors {
+		if descriptor.input != previous {
+			continue
+		}
+		if updated == nil {
+			updated = maps.Clone(s.descriptors)
+		}
+		copy := *descriptor
+		copy.input = next
+		updated[fd] = &copy
+	}
+	if updated != nil {
+		s.setDescriptors(updated)
+	}
+}
+
+func (s *State) setDescriptors(descriptors map[int]*descriptorTarget) {
+	s.descriptors = descriptors
+	s.descriptorBytes = descriptorMaterialization(descriptors, s.stdin)
+}
+
+func descriptorMaterialization(descriptors map[int]*descriptorTarget, stdin *uncertain[[]byte]) int {
+	total := 0
+	inputs := map[*uncertain[[]byte]]bool{stdin: true}
+	for _, descriptor := range descriptors {
+		size := materialize.EntryBytes
+		if descriptor != nil {
+			size += len(descriptor.inputFile)
+			if descriptor.output != nil {
+				size += len(descriptor.output.file)
+			}
+			if descriptor.input != nil && !inputs[descriptor.input] {
+				inputs[descriptor.input] = true
+				value, _ := descriptor.input.Data()
+				size += len(value)
+			}
+		}
+		var ok bool
+		total, ok = materialize.Add(total, size, math.MaxInt)
+		if !ok {
+			return math.MaxInt
+		}
+	}
+	return total
+}
+
+func (s *State) bindInput(input *uncertain[[]byte]) {
+	s.stdin = input
+	descriptors := maps.Clone(s.descriptors)
+	if descriptors == nil {
+		descriptors = make(map[int]*descriptorTarget)
+	}
+	descriptors[0] = &descriptorTarget{key: new(byte), input: input}
+	s.setDescriptors(descriptors)
+}
+
+func (s *State) restoreRedirections(plan *redirectionPlan) {
+	s.redirectionFrames = s.redirectionFrames[:len(s.redirectionFrames)-1]
+	s.redirectionBytes -= plan.retainedBytes
+	if s.keptRedirections == plan {
+		s.keptRedirections = nil
+		return
+	}
+	updated := maps.Clone(s.descriptors)
+	for fd, saved := range plan.saved {
+		if saved == nil {
+			delete(updated, fd)
+			continue
+		}
+		// A descriptor duplicated into stdin may have been consumed. Restore
+		// the previous binding, not its stale input cursor.
+		for _, descriptor := range s.descriptors {
+			if descriptor.key == saved.key {
+				saved = descriptor
+				break
+			}
+		}
+		updated[fd] = saved
+	}
+	if _, replaced := plan.saved[0]; replaced {
+		s.stdin = updated[0].input
+		if s.stdin == nil {
+			s.stdin = newCertain[[]byte](nil)
+		}
+	}
+	s.setDescriptors(updated)
+}
+
+// captureDescriptor installs a pipeline/substitution capture without changing
+// other inherited file descriptors.
+func (s *State) captureDescriptor(fd int) {
+	if s.descriptors == nil {
+		return
+	}
+	descriptors := maps.Clone(s.descriptors)
+	descriptors[fd] = &descriptorTarget{key: new(byte), output: &outputTarget{id: fd, captureFD: fd}}
+	s.setDescriptors(descriptors)
+}
+
+func (s *State) commandRedirects(active []*Redirect) []*Redirect {
+	baseline := maps.Clone(s.descriptors)
+	for index := len(s.redirectionFrames) - 1; index >= 0; index-- {
+		for fd, saved := range s.redirectionFrames[index].saved {
+			if saved == nil {
+				delete(baseline, fd)
+			} else {
+				baseline[fd] = saved
+			}
+		}
+	}
+	var descriptors []int
+	for fd := range baseline {
+		descriptors = append(descriptors, fd)
+	}
+	sort.Ints(descriptors)
+	var redirects []*Redirect
+	for _, fd := range descriptors {
+		descriptor := baseline[fd]
+		if descriptor.inputFile != "" && descriptor.output != nil && descriptor.output.file == descriptor.inputFile {
+			redirects = append(redirects, &Redirect{FD: fd, Operator: "<>", Target: descriptor.inputFile})
+			continue
+		}
+		if descriptor.inputFile != "" {
+			redirects = append(redirects, &Redirect{FD: fd, Operator: "<", Target: descriptor.inputFile})
+		}
+		if output := descriptor.output; output != nil && output.file != "" {
+			op := ">"
+			if output.append {
+				op = ">>"
+			}
+			redirects = append(redirects, &Redirect{FD: fd, Operator: op, Target: output.file})
+		}
+	}
+	redirects = append(redirects, cloneRedirects(active)...)
+	bindings := make(map[int]*byte)
+	for _, frame := range s.redirectionFrames {
+		for fd, key := range frame.bindings {
+			bindings[fd] = key
+		}
+	}
+	var replaced []int
+	for fd, key := range bindings {
+		if descriptor := s.descriptors[fd]; descriptor != nil && descriptor.key != key {
+			replaced = append(replaced, fd)
+		}
+	}
+	sort.Ints(replaced)
+	for _, fd := range replaced {
+		descriptor := s.descriptors[fd]
+		redirect := &Redirect{FD: fd, Operator: "<&", Unresolved: true}
+		if descriptor.inputFile != "" {
+			redirect.Operator, redirect.Target, redirect.Unresolved = "<", descriptor.inputFile, false
+		}
+		if descriptor.output != nil && descriptor.output.file != "" {
+			redirect.Operator, redirect.Target, redirect.Unresolved = ">", descriptor.output.file, false
+			if descriptor.inputFile == descriptor.output.file {
+				redirect.Operator = "<>"
+			}
+		}
+		redirects = append(redirects, redirect)
+	}
+	return redirects
 }
 
 func abstractDescriptor(targetID int) *descriptorTarget {
 	return &descriptorTarget{
 		input:  newUnresolved[[]byte](nil),
 		output: &outputTarget{id: targetID, external: true},
+	}
+}
+
+func (plan *redirectionPlan) truncateInputs(filename string) {
+	for fd, descriptor := range plan.descriptors {
+		if descriptor.inputFile != filename {
+			continue
+		}
+		copy := *descriptor
+		truncateDescriptorInput(&copy, filename)
+		plan.descriptors[fd] = &copy
 	}
 }
 

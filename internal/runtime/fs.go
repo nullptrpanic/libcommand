@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	iofs "io/fs"
+	"maps"
 	"path"
 	"sort"
 	"strings"
@@ -50,24 +51,10 @@ func (fs *memoryFS) ensureMutable() {
 	if !fs.shared {
 		return
 	}
-	files := make(map[string][]byte, len(fs.files))
-	for name, contents := range fs.files {
-		files[name] = append([]byte(nil), contents...)
-	}
-	dirs := make(map[string]struct{}, len(fs.dirs))
-	for name := range fs.dirs {
-		dirs[name] = struct{}{}
-	}
-	var unknownFiles map[string]struct{}
-	if len(fs.unknownFiles) != 0 {
-		unknownFiles = make(map[string]struct{}, len(fs.unknownFiles))
-		for name := range fs.unknownFiles {
-			unknownFiles[name] = struct{}{}
-		}
-	}
-	fs.files = files
-	fs.dirs = dirs
-	fs.unknownFiles = unknownFiles
+	// File contents are immutable; mutation replaces only the target payload.
+	fs.files = maps.Clone(fs.files)
+	fs.dirs = maps.Clone(fs.dirs)
+	fs.unknownFiles = maps.Clone(fs.unknownFiles)
 	fs.shared = false
 }
 
@@ -179,7 +166,7 @@ func (fs *memoryFS) writeValueMode(name string, contents []byte, appendMode, unk
 		fs.dirs[directory] = struct{}{}
 	}
 	if appendMode {
-		fs.files[name] = append(fs.files[name], contents...)
+		fs.files[name] = append(previous[:len(previous):len(previous)], contents...)
 	} else {
 		fs.files[name] = append([]byte(nil), contents...)
 	}

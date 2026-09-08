@@ -21,7 +21,7 @@ func (e *ExecutionContext) arithmeticValue(s *State, expression syntax.ArithmExp
 	if expression == nil {
 		return 0, errors.New("missing arithmetic expression")
 	}
-	if err := validateUnknownParameterExpansions(s, expression); err != nil {
+	if err := validateParameterExpansions(s, expression, false); err != nil {
 		return 0, err
 	}
 	if err := normalizeArithmeticLiterals(expression); err != nil {
@@ -108,6 +108,13 @@ func (evaluator *bashArithmeticEvaluator) evaluateText(value string) (int64, err
 	if syntax.ValidName(value) || syntheticReference || arrayReference {
 		return evaluator.evaluateReference(value)
 	}
+	// Expansion can return the same expression text, not only a variable
+	// reference. Re-parsing it must share the existing recursion bound.
+	if _, resolving := evaluator.resolving[value]; resolving || len(evaluator.resolving) >= 1024 {
+		return 0, errors.New("arithmetic expression recursion limit reached")
+	}
+	evaluator.resolving[value] = struct{}{}
+	defer delete(evaluator.resolving, value)
 	expression, err := ParseArithmetic(evaluator.environment.ExecutionContext.ctx, value)
 	if err != nil {
 		return 0, err

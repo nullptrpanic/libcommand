@@ -2,7 +2,6 @@ package runtime
 
 import (
 	"context"
-	"strconv"
 
 	"mvdan.cc/sh/v3/expand"
 	"mvdan.cc/sh/v3/syntax"
@@ -56,13 +55,13 @@ func (c *CommandContext) Arithmetic(expression syntax.ArithmExpr) (*ArithmeticRe
 // state. Expansion, readonly checks, and materialization budgets remain owned
 // by the runtime.
 func (c *CommandContext) ApplyAssignments(assignments []*syntax.Assign, declaredKind expand.ValueKind, exported bool) error {
-	return c.execution.applyAssignments(c.state, assignments, declaredKind, exported)
+	return c.execution.applyPreparedAssignments(c.state, assignments, declaredKind, exported, c.expansions)
 }
 
 // ExpandLiteral expands one word without field splitting or pathname
 // expansion for a stateful builtin argument.
 func (c *CommandContext) ExpandLiteral(word *syntax.Word) (string, bool, error) {
-	return c.execution.literalValueWithCertainty(c.state, word)
+	return c.expansions.literal(c.execution, c.state, word)
 }
 
 func (c *CommandContext) MaxMemoryBytes() int {
@@ -174,11 +173,7 @@ func (c *CommandContext) ConsumeInput(delimiter byte, maximum int, exact, joinEs
 }
 
 func (c *CommandContext) setInputView(input []byte, unresolved bool) {
-	if unresolved {
-		c.state.stdin = newUnresolved(input)
-		return
-	}
-	c.state.stdin = newCertain(input)
+	c.state.setInput(newUncertain(input, unresolved))
 }
 
 func (c *CommandContext) CandidateContext() bool {
@@ -328,12 +323,13 @@ func (c *CommandContext) UnsetVariable(name string) error {
 }
 
 func (c *CommandContext) PositionalArguments() []string {
-	count, _ := strconv.Atoi(c.state.vars.Get("#").String())
-	arguments := make([]string, 0, count)
-	for index := 1; index <= count; index++ {
-		arguments = append(arguments, c.state.vars.Get(strconv.Itoa(index)).String())
-	}
-	return arguments
+	return concreteArgumentValues(c.state.positionalArguments())
+}
+
+// TypedPositionalArguments returns a copy of the positional arguments with
+// per-argument certainty. Prefer it when forwarding or changing arguments.
+func (c *CommandContext) TypedPositionalArguments() []*Argument {
+	return c.state.positionalArguments()
 }
 
 func (c *CommandContext) ReadFile(name string) ([]byte, bool, bool) {
@@ -342,6 +338,12 @@ func (c *CommandContext) ReadFile(name string) ([]byte, bool, bool) {
 
 func (c *CommandContext) ReplacePositionalArguments(arguments []string) {
 	c.state.replacePositionalArguments(arguments)
+}
+
+// ReplaceTypedPositionalArguments sets positional arguments without converting
+// unknown values to known empty strings.
+func (c *CommandContext) ReplaceTypedPositionalArguments(arguments []*Argument) {
+	c.state.replaceTypedPositionalArguments(arguments)
 }
 
 func (c *CommandContext) RecordVariableRollback(name string) {
@@ -373,18 +375,10 @@ func (c *CommandContext) DefineVariable(name string, value *expand.Variable, unk
 	})
 }
 
-func (c *CommandContext) mutateVariables(change func() error) (err error) {
-	original := c.state.vars
-	c.state.vars = c.state.vars.clone()
-	defer func() {
-		if err != nil {
-			c.state.vars = original
-		}
-	}()
-	if err = change(); err == nil {
-		err = c.execution.checkStateMaterialization(c.state)
-	}
-	return err
+func (c *CommandContext) mutateVariables(change func() error) error {
+	return c.state.mutateAndCheck(change, func() error {
+		return c.execution.checkStateMaterialization(c.state)
+	})
 }
 
 func (c *CommandContext) IndexedSlots(name string) map[int]struct{} {

@@ -20,45 +20,25 @@ func (e *ExecutionContext) lookupCommandDefinition(name string) *CommandDefiniti
 	return e.config.LookupCommand(name)
 }
 
-func (e *ExecutionContext) commandInvocation(s *State, name string, args []*Argument, input []byte, source *location, internal bool) (*Invocation, Status, error) {
-	path := &pathResult{state: s, status: StatusCompleted}
-	if !internal {
-		invocationBytes, ok := commandInvocationMaterialization(s, name, args, input)
-		if !ok {
-			err := e.failMaterialization([]*pathResult{path}, source)
-			return nil, path.status, err
-		}
-		if err := e.checkPathsMaterialization([]*pathResult{path}, invocationBytes, source); err != nil {
-			return nil, path.status, err
-		}
-	}
-
-	var invocationArguments []*Argument
-	if len(args) != 0 {
-		invocationArguments = args
+// Populate the final call snapshot only after syntax operands are prepared and
+// their combined retained size has been checked.
+func populateCommandInvocation(s *State, invocation *Invocation, internal bool) {
+	if len(invocation.Args) == 0 {
+		invocation.Args = nil
 	}
 	directory, directoryUnresolved := s.dir.Data()
-	_, stdinUnresolved := s.stdin.Data()
-	nameUnresolved := name == ""
-	invocation := &Invocation{Name: name, Args: invocationArguments, Dir: directory, Stdin: input}
-	if internal {
-		if nameUnresolved || stdinUnresolved || directoryUnresolved {
-			invocation.Unresolved = &InvocationUnresolved{Name: nameUnresolved, Dir: directoryUnresolved, Stdin: stdinUnresolved}
+	input, stdinUnresolved := s.stdin.Data()
+	invocation.Dir, invocation.Stdin = directory, input
+	var unresolvedEnvironment []string
+	if !internal {
+		invocation.Env = s.vars.exported()
+		unresolvedEnvironment = unknownExportedVariables(s)
+		for _, variable := range unresolvedEnvironment {
+			invocation.Env[variable] = ""
 		}
-		if stdinUnresolved {
-			invocation.Stdin = nil
-		}
-		if directoryUnresolved {
-			invocation.Dir = ""
-		}
-		return invocation, StatusCompleted, nil
+		invocation.Stdin = append([]byte(nil), input...)
 	}
-
-	invocation.Env = s.vars.exported()
-	unresolvedEnvironment := unknownExportedVariables(s)
-	for _, variable := range unresolvedEnvironment {
-		invocation.Env[variable] = ""
-	}
+	nameUnresolved := invocation.Name == ""
 	if nameUnresolved || len(unresolvedEnvironment) != 0 || stdinUnresolved || directoryUnresolved {
 		invocation.Unresolved = &InvocationUnresolved{
 			Name:  nameUnresolved,
@@ -67,14 +47,12 @@ func (e *ExecutionContext) commandInvocation(s *State, name string, args []*Argu
 			Stdin: stdinUnresolved,
 		}
 	}
-	invocation.Stdin = append([]byte(nil), input...)
 	if stdinUnresolved {
 		invocation.Stdin = nil
 	}
 	if directoryUnresolved {
 		invocation.Dir = ""
 	}
-	return invocation, StatusCompleted, nil
 }
 
 func concreteArguments(values []string) []*Argument {
@@ -122,14 +100,22 @@ func (e *ExecutionContext) expandCallArguments(s *State, words []*syntax.Word) (
 		if err := e.ctx.Err(); err != nil {
 			return nil, err
 		}
+		if positional, handled := quotedPositionalArguments(s, word); handled {
+			for _, argument := range positional {
+				materializedBytes, err = e.addMaterializedString(materializedBytes, argument.Value)
+				if err != nil {
+					return nil, err
+				}
+			}
+			fields = append(fields, positional...)
+			continue
+		}
 		if err := normalizeWordArithmeticLiterals(word); err != nil {
 			return nil, err
 		}
 		certainty := wordCertainty(s, word)
-		if !certainty.dataUnknown() {
-			if err := validateUnknownParameterExpansions(s, word); err != nil {
-				return nil, err
-			}
+		if err := validateParameterExpansions(s, word, certainty.dataUnknown()); err != nil {
+			return nil, err
 		}
 		if err := e.checkBraceExpansion(word, materializedBytes); err != nil {
 			return nil, err
@@ -159,4 +145,21 @@ func (e *ExecutionContext) expandCallArguments(s *State, words []*syntax.Word) (
 		fields = append(fields, concreteArguments(expanded)...)
 	}
 	return fields, nil
+}
+
+// Quoted $@ has a known number of fields even when some values are unknown.
+// Other unknown expansions may also have unknown field cardinality.
+func quotedPositionalArguments(s *State, word *syntax.Word) ([]*Argument, bool) {
+	if word == nil || len(word.Parts) != 1 {
+		return nil, false
+	}
+	quoted, ok := word.Parts[0].(*syntax.DblQuoted)
+	if !ok || len(quoted.Parts) != 1 {
+		return nil, false
+	}
+	parameter, ok := quoted.Parts[0].(*syntax.ParamExp)
+	if !ok || parameter.Param.Value != "@" || parameter.Length || parameter.Excl || parameter.Width || parameter.Index != nil || parameter.Slice != nil || parameter.Repl != nil || parameter.Exp != nil {
+		return nil, false
+	}
+	return s.positionalArguments(), true
 }

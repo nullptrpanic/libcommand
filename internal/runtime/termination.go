@@ -19,8 +19,8 @@ func (e *ExecutionContext) applyFailureEffects(paths []*pathResult, source *loca
 		return paths, nil
 	}
 	result := make([]*pathResult, 0, len(paths))
-	for _, path := range paths {
-		if path.status != StatusCompleted || path.state.signal != signalNone {
+	for index, path := range paths {
+		if path.status != StatusCompleted || path.state.signal != signalNone || path.failureHandled {
 			result = append(result, path)
 			continue
 		}
@@ -36,7 +36,7 @@ func (e *ExecutionContext) applyFailureEffects(paths []*pathResult, source *loca
 			if resolveErr != nil {
 				return append(result, resolvedPaths...), resolveErr
 			}
-			for _, resolved := range resolvedPaths {
+			for resolvedIndex, resolved := range resolvedPaths {
 				if resolved.status != StatusCompleted {
 					result = append(result, resolved)
 					continue
@@ -46,7 +46,9 @@ func (e *ExecutionContext) applyFailureEffects(paths []*pathResult, source *loca
 					result = append(result, resolved)
 					continue
 				}
-				failed, err := e.applyKnownFailure(resolved)
+				failed, err := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+					return e.applyKnownFailure(resolved)
+				}, result, paths[index+1:], resolvedPaths[resolvedIndex+1:])
 				result = append(result, failed...)
 				if err != nil {
 					return result, err
@@ -55,7 +57,9 @@ func (e *ExecutionContext) applyFailureEffects(paths []*pathResult, source *loca
 			continue
 		}
 		if exitCode != 0 {
-			failed, err := e.applyKnownFailure(path)
+			failed, err := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+				return e.applyKnownFailure(path)
+			}, result, paths[index+1:])
 			result = append(result, failed...)
 			if err != nil {
 				return result, err
@@ -90,13 +94,14 @@ func (e *ExecutionContext) applyKnownFailure(path *pathResult) ([]*pathResult, e
 		if current.state.options.errexit {
 			current.state.signal = signalExit
 		}
+		current.failureHandled = true
 	}
 	return paths, nil
 }
 
 func (e *ExecutionContext) evaluateExitTraps(paths []*pathResult) ([]*pathResult, error) {
 	results := make([]*pathResult, 0, len(paths))
-	for _, path := range paths {
+	for index, path := range paths {
 		command, exists := path.state.traps["EXIT"]
 		if !exists || path.state.exitTrapInherited || path.status != StatusCompleted {
 			results = append(results, path)
@@ -105,7 +110,9 @@ func (e *ExecutionContext) evaluateExitTraps(paths []*pathResult) ([]*pathResult
 		originalExitStatus := path.state.exitStatus
 		path.state.deleteTrap("EXIT")
 		path.state.signal = signalNone
-		trapped, err := e.evaluateSourceText(path.state, command, "EXIT trap")
+		trapped, err := e.evaluateWithRetainedPaths(func() ([]*pathResult, error) {
+			return e.evaluateSourceText(path.state, command, "EXIT trap")
+		}, results, paths[index+1:])
 		for _, current := range trapped {
 			if current.status != StatusCompleted || current.state.signal != signalNone {
 				continue

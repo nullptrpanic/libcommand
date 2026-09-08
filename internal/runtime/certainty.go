@@ -26,21 +26,28 @@ func (certainty valueCertainty) dataUnknown() bool {
 }
 
 func wordCertainty(s *State, word *syntax.Word) valueCertainty {
+	return expansionCertainty(s, word, true)
+}
+
+func literalWordCertainty(s *State, word *syntax.Word) valueCertainty {
+	return expansionCertainty(s, word, false)
+}
+
+func expansionCertainty(s *State, word *syntax.Word, fields bool) valueCertainty {
 	if word == nil {
 		return 0
 	}
-	certainty := implicitWordCertainty(s, word)
 	if word.Lit() != "" {
-		return certainty
+		return implicitWordCertainty(s, word, fields)
 	}
 	restore := maskInactiveParameterWords(s, word)
 	defer restore()
-	return certainty | unmaskedWordCertainty(s, word, stateHasUnknownData(s))
+	return implicitWordCertainty(s, word, fields) | unmaskedWordCertainty(s, word, stateHasUnknownData(s))
 }
 
-func implicitWordCertainty(s *State, word *syntax.Word) valueCertainty {
+func implicitWordCertainty(s *State, word *syntax.Word, fields bool) valueCertainty {
 	var certainty valueCertainty
-	if s.vars.isUnknown("IFS") && wordDependsOnIFS(word) {
+	if s.vars.isUnknown("IFS") && wordDependsOnIFS(word, fields) {
 		certainty |= certaintyDataUnknown
 	}
 	if name, tilde := leadingTildeName(word); tilde {
@@ -52,46 +59,48 @@ func implicitWordCertainty(s *State, word *syntax.Word) valueCertainty {
 			certainty |= certaintyHostUnknown
 		}
 	}
-	_, directoryUnresolved := s.dir.Data()
-	if directoryUnresolved && !s.options.noGlob && wordHasRelativeGlob(s, word) {
-		certainty |= certaintyHostUnknown
-	}
-	globIgnore := s.vars.Get("GLOBIGNORE")
-	if wordMayExpandGlob(s, word) && (s.vars.isUnknown("GLOBIGNORE") || globIgnore.IsSet() && globIgnore.String() != "") {
-		certainty |= certaintyDataUnknown
+	if fields && !s.options.noGlob {
+		_, directoryUnresolved := s.dir.Data()
+		if directoryUnresolved && wordHasRelativeGlob(s, word) {
+			certainty |= certaintyHostUnknown
+		}
+		globIgnore := s.vars.Get("GLOBIGNORE")
+		if wordMayExpandGlob(s, word) && (s.vars.isUnknown("GLOBIGNORE") || globIgnore.IsSet() && globIgnore.String() != "") {
+			certainty |= certaintyDataUnknown
+		}
 	}
 	return certainty
 }
 
-func wordDependsOnIFS(word *syntax.Word) bool {
-	for _, part := range word.Parts {
-		switch part := part.(type) {
-		case *syntax.ParamExp, *syntax.CmdSubst, *syntax.ArithmExp:
-			return true
-		case *syntax.DblQuoted:
-			depends := false
-			syntax.Walk(part, func(node syntax.Node) bool {
-				parameter, ok := node.(*syntax.ParamExp)
-				if !ok || parameter.Param == nil {
-					return true
-				}
-				if parameter.Param.Value == "*" {
-					depends = true
-					return false
-				}
-				index, ok := parameter.Index.(*syntax.Word)
-				if ok && index.Lit() == "*" {
-					depends = true
-					return false
-				}
-				return true
-			})
-			if depends {
+func wordDependsOnIFS(word *syntax.Word, fields bool) bool {
+	if fields {
+		for _, part := range word.Parts {
+			switch part.(type) {
+			case *syntax.ParamExp, *syntax.CmdSubst, *syntax.ArithmExp:
 				return true
 			}
 		}
 	}
-	return false
+	// Star expansion joins values using IFS even without field splitting.
+	// Length expansion and already-computed command stdout do not join.
+	depends := false
+	syntax.Walk(word, func(node syntax.Node) bool {
+		if depends {
+			return false
+		}
+		switch node := node.(type) {
+		case *syntax.CmdSubst, *syntax.ProcSubst:
+			return false
+		case *syntax.ParamExp:
+			if node.Length || node.Param == nil {
+				return false
+			}
+			index, indexed := node.Index.(*syntax.Word)
+			depends = node.Param.Value == "*" || indexed && index.Lit() == "*"
+		}
+		return !depends
+	})
+	return depends
 }
 
 func leadingTildeName(word *syntax.Word) (string, bool) {
@@ -318,7 +327,7 @@ func (e *ExecutionContext) literalValueWithCertainty(s *State, word *syntax.Word
 	if word == nil {
 		return "", false, nil
 	}
-	certainty := wordCertainty(s, word)
+	certainty := literalWordCertainty(s, word)
 	value, err := e.expandWordValue(s, word, expand.Literal)
 	if err == nil && certainty.hostUnknown() {
 		err = fmt.Errorf("word depends on host runtime state")
@@ -359,6 +368,9 @@ func parameterBaseUnknown(s *State, parameter *syntax.ParamExp) (bool, expand.Va
 	name := parameter.Param.Value
 	environment := &stateEnvironment{state: s}
 	variable := environment.Get(name)
+	if parameter.Length && (name == "@" || name == "*") {
+		return false, variable
+	}
 	if resolvedName, resolved := variable.Resolve(environment); resolvedName != "" {
 		name = resolvedName
 		variable = resolved
@@ -439,8 +451,11 @@ func unknownExportedVariables(s *State) []string {
 	return unknown
 }
 
-func validateUnknownParameterExpansions(s *State, node syntax.Node) error {
-	if node == nil || !stateHasUnknownData(s) {
+func validateParameterExpansions(s *State, node syntax.Node, allowUnknown bool) error {
+	if node == nil {
+		return nil
+	}
+	if word, ok := node.(*syntax.Word); ok && word.Lit() != "" {
 		return nil
 	}
 	restore := maskInactiveParameterWords(s, node)
@@ -458,8 +473,17 @@ func validateUnknownParameterExpansions(s *State, node syntax.Node) error {
 			return true
 		}
 		switch parameter.Exp.Op {
+		case syntax.OtherParamOps:
+			// The parser accepts more Bash transformations than expand implements.
+			// Reject those operations before the dependency's panic-only fallback.
+			switch operator := parameter.Exp.Word.Lit(); operator {
+			case "Q", "E", "a", "A", "P":
+			default:
+				result = fmt.Errorf("unsupported parameter transformation @%s", operator)
+				return false
+			}
 		case syntax.DefaultUnsetOrNull, syntax.AlternateUnsetOrNull, syntax.AssignUnsetOrNull, syntax.ErrorUnsetOrNull:
-			if unknown, _ := parameterBaseUnknown(s, parameter); unknown {
+			if unknown, _ := parameterBaseUnknown(s, parameter); !allowUnknown && unknown {
 				result = newUnknownValueError("parameter expansion")
 				return false
 			}

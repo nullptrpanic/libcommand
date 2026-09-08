@@ -30,7 +30,7 @@ func TestRevRejectsFileOperands(t *testing.T) {
 }
 
 func TestRevDeclinesUnresolvedStdin(t *testing.T) {
-	result, err := executeRev(context.Background(), &runtime.Invocation{
+	result, _, err := executeRev(context.Background(), &runtime.Invocation{
 		Name:       "rev",
 		Unresolved: &runtime.InvocationUnresolved{Stdin: true},
 	}, 2<<20)
@@ -41,11 +41,11 @@ func TestRevDeclinesUnresolvedStdin(t *testing.T) {
 
 func TestRevHonorsMaterializationLimit(t *testing.T) {
 	invocation := &runtime.Invocation{Name: "rev", Stdin: []byte("abc\n")}
-	result, err := executeRev(context.Background(), invocation, 4)
+	result, _, err := executeRev(context.Background(), invocation, 4)
 	if err != nil || string(result.Stdout.Value) != "cba\n" {
 		t.Fatalf("exact limit result = %#v, error = %v", result, err)
 	}
-	result, err = executeRev(context.Background(), invocation, 3)
+	result, _, err = executeRev(context.Background(), invocation, 3)
 	if result != nil || err == nil || err.Error() != "maximum materialized byte count 3 reached" {
 		t.Fatalf("over limit result = %#v, error = %v", result, err)
 	}
@@ -103,5 +103,6 @@ func runRev(ctx context.Context, stdin []byte, args []string) (*runtime.CommandO
 	for index, argument := range args {
 		arguments[index] = &runtime.Argument{Kind: runtime.ArgumentString, Value: argument}
 	}
-	return executeRev(ctx, &runtime.Invocation{Name: "rev", Args: arguments, Stdin: stdin}, 2<<20)
+	output, _, err := executeRev(ctx, &runtime.Invocation{Name: "rev", Args: arguments, Stdin: stdin}, 2<<20)
+	return output, err
 }

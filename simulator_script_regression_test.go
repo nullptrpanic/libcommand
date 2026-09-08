@@ -76,7 +76,7 @@ func repositoryScriptChatIDs(t testing.TB, name string) []string {
 
 func repositoryScriptSource(t testing.TB, name string) string {
 	t.Helper()
-	source, err := os.ReadFile(filepath.Join("scripts", name))
+	source, err := os.ReadFile(filepath.Join("testdata", "scripts", name))
 	if err != nil {
 		t.Fatal(err)
 	}

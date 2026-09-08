@@ -69,7 +69,7 @@ func restoreSavedAssignments(paths []*pathResult, saved map[string]*savedVariabl
 	}
 }
 
-func (e *ExecutionContext) evaluateFunctionCallAfterStep(s *State, source syntax.Node, assignments []*syntax.Assign, declaration *syntax.FuncDecl, args []string) ([]*pathResult, error) {
+func (e *ExecutionContext) evaluateFunctionCallAfterStep(s *State, source syntax.Node, assignments []*syntax.Assign, declaration *syntax.FuncDecl, args []*Argument) ([]*pathResult, error) {
 	if status := e.checkContext(s, sourceLocation(source)); status != StatusCompleted {
 		return []*pathResult{{state: s, status: status}}, nil
 	}
@@ -94,6 +94,9 @@ func (e *ExecutionContext) evaluateFunctionCallAfterStep(s *State, source syntax
 	}
 	paths, err := e.evaluateStatement(s, declaration.Body)
 	for _, path := range paths {
+		// A function invocation has its own failure boundary, distinct from
+		// the compound statements in its body.
+		path.failureHandled = false
 		if !inheritErrTrap {
 			if inheritedErrTrap {
 				path.state.setTrap("ERR", errCommand)
@@ -110,7 +113,7 @@ func (e *ExecutionContext) evaluateFunctionCallAfterStep(s *State, source syntax
 	return paths, err
 }
 
-func (e *ExecutionContext) setFunctionArguments(s *State, args []string) {
+func (e *ExecutionContext) setFunctionArguments(s *State, args []*Argument) {
 	for _, name := range []string{"#", "@", "*"} {
 		s.saveLocal(name)
 		s.vars.delete(name)
@@ -124,5 +127,5 @@ func (e *ExecutionContext) setFunctionArguments(s *State, args []string) {
 	for index := range args {
 		s.saveLocal(strconv.Itoa(index + 1))
 	}
-	s.replacePositionalArguments(args)
+	s.replaceTypedPositionalArguments(args)
 }

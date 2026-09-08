@@ -1,5 +1,5 @@
 package builtin
 
 func init() {
-	registerCommand("typeset", executeDeclaration)
+	registerDeclaration("typeset")
 }

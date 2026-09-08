@@ -202,6 +202,11 @@ Context 被取消后及时返回；进程内 Handler 无法由模拟器强制中
 受支持的赋值、命令替换、管道、重定向、虚拟文件和 Builtin 继续传播。只有当
 控制流必须读取未知结果时，执行器才创建分支。
 
+已知的函数体、source 文件和子 Shell 源码，不会因为部分位置参数未知就整段跳过。
+每个参数位置在 `"$@"`、`shift`、`set --` 中保留独立的确定性；参数值未知不等于
+参数数量未知。未知源码或选项不会被伪造成可执行文本。对于数量本身未知的列表，
+仍采用下文说明的代表性路径模型。
+
 例如：
 
 ```bash
@@ -309,6 +314,11 @@ builder.Middleware(func(next libcommand.Command) libcommand.Command {
 因此也会经过 Middleware。Middleware 可以检查或拒绝调用、调整结果，或者继续
 调用 `next`（最多一次）；其并发与生命周期约束和普通 `Command` 相同。
 
+默认 Builtin 和调用方命令都会向 Middleware 提供已导出环境和类型化展开参数。
+声明与 `let` 等特殊 AST 入口在进入链路前只准备一次 Shell 操作数，Builtin 执行时
+复用结果，不会为了观察而再次执行算术展开或命令替换。复合数组声明保留现有的
+语法感知表示，可以通过 `CommandSyntax` 访问。
+
 默认注册表包含常用 Shell Builtin 和确定性的进程内辅助命令：
 
 | 分类 | 命令 |
@@ -403,6 +413,11 @@ builder.Command("evaluate", func(
 - `Redirects`，包含当前调用的重定向目标和操作符；虚拟文件目标为绝对路径，
   未知目标会设置 `Redirect.Unresolved`；
 - `CommandContext` 暴露的虚拟文件系统、输入、选项、查找、算术和嵌套执行操作。
+- `Argv0` 和 `CommandResult.WithArgv0` 在不改变命令查找名称的情况下传递
+  `exec -a/-l` 的参数零；
+- `TypedPositionalArguments`、`ReplaceTypedPositionalArguments` 和
+  `CommandResult.WithArguments` 可将未知位置参数传入 `Source` 或 `RunShell`；
+  原有的字符串 API 继续可用；
 - `Output` 与 `Result` 用于一个命令结果；Output builder 默认创建已确定的空
   stdout/stderr 和退出码 0；
 - `ForkState`、`NewResult` 与 `AddOutput` 用于同时存在多个“状态 + 输出”结果的命令。
@@ -412,6 +427,13 @@ builder.Command("evaluate", func(
 `State` 指针。`Input` 和 `ConsumeInput`
 返回的字节切片归调用方所有，`SetInput` 也会复制传入数据，因此命令无法通过共享
 缓冲区修改其他保留路径。
+
+命令产生的输出会立即写入对应的虚拟文件，因此同一个重定向块内的后续语句可以
+读到更新后的内容。无目标命令的 `exec` 持久保留自身的数字 FD 绑定；临时重定向
+只恢复其作用域负责的 FD。调用方命令也可使用 `PersistRedirections` 实现相同行为。
+重复绑定的输入 FD 共享消费进度，嵌套执行结束后会同步继承输入的消费位置。这些
+都是虚拟流，不会打开宿主机 FD；独立 OS 文件偏移和任意 stdout/stderr 交错仍不在
+支持范围内。
 
 返回值语义是明确的：
 
@@ -504,6 +526,10 @@ flowchart TB
 分配、Go Runtime 开销，以及 Handler 返回前自行产生的分配，无法在同一进程中
 被硬限制。处理不可信 Bash 时，应将这些预算和 Context Deadline 与适合部署
 环境的进程级隔离组合使用。
+
+计费包括暂停中的父状态、保留的兄弟路径、虚拟 FD 的输入和恢复状态，以及当前
+命令已准备的操作数。输出追加复用当前路径独占的容量；Copy-on-Write 表共享未变更
+的不可变内容，只复制本次变更涉及的数据，不会重复复制所有文件和数组。
 
 ## Trace 与 Playground
 

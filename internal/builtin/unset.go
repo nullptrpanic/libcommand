@@ -3,7 +3,6 @@ package builtin
 import (
 	"context"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/nullptrpanic/libcommand/internal/runtime"
@@ -42,38 +41,63 @@ func executeUnset(_ context.Context, shell *runtime.CommandContext, invocation *
 			shell.DeleteFunction(argument)
 			continue
 		}
-		if err := unsetShellTarget(shell, argument); err != nil {
-			return commandResult(shell, nil, []byte(fmt.Sprintf("unset: `%s': %v\n", argument, err)), 1), nil
+		if failure, err := unsetShellTarget(shell, argument); failure != nil || err != nil {
+			return failure, err
 		}
 	}
 	return commandResult(shell, nil, nil, 0), nil
 }
 
-func unsetShellTarget(shell *runtime.CommandContext, target string) error {
+// A nil result means this operand succeeded and the next may be processed.
+func unsetShellTarget(shell *runtime.CommandContext, target string) (*runtime.CommandResult, error) {
+	failure := func(message string) (*runtime.CommandResult, error) {
+		return commandResult(shell, nil, []byte(fmt.Sprintf("unset: `%s': %s\n", target, message)), 1), nil
+	}
 	if syntax.ValidName(target) {
-		return shell.UnsetVariable(target)
+		if err := shell.UnsetVariable(target); err != nil {
+			return failure(err.Error())
+		}
+		return nil, nil
 	}
 	open := strings.IndexByte(target, '[')
 	if open <= 0 || !strings.HasSuffix(target, "]") {
-		return fmt.Errorf("not a valid identifier")
+		return failure("not a valid identifier")
 	}
 	name := target[:open]
 	if !syntax.ValidName(name) {
-		return fmt.Errorf("not a valid identifier")
+		return failure("not a valid identifier")
 	}
 	variable := shell.Variable(name)
 	if variable.ReadOnly {
-		return fmt.Errorf("cannot unset: readonly variable")
+		return failure("cannot unset: readonly variable")
 	}
 	index := target[open+1 : len(target)-1]
 	switch variable.Kind {
 	case expand.Indexed:
-		parsed, err := strconv.Atoi(index)
-		if err != nil || parsed < 0 {
-			return fmt.Errorf("invalid array index")
+		if index == "@" || index == "*" {
+			variable.List = nil
+			return nil, shell.AssignIndexedVariable(name, variable, false, nil)
+		}
+		expression, err := shell.ParseArithmetic(index)
+		if err != nil {
+			return failure("invalid array index")
+		}
+		value, err := shell.Arithmetic(expression)
+		if err != nil {
+			return nil, err
+		}
+		if value.Unknown {
+			if err := shell.AssignIndexedVariable(name, variable, true, shell.IndexedSlots(name)); err != nil {
+				return nil, err
+			}
+			return unresolvedExitCommandResult(shell, 0), nil
+		}
+		parsed := value.Value
+		if value.Failure != "" || parsed < 0 {
+			return failure("invalid array index")
 		}
 		if parsed >= len(variable.List) {
-			return nil
+			return nil, nil
 		}
 		slots := explicitIndexedSlots(shell.IndexedSlots(name), len(variable.List))
 		delete(slots, parsed)
@@ -85,12 +109,12 @@ func unsetShellTarget(shell *runtime.CommandContext, target string) error {
 			}
 			variable.List = variable.List[:last]
 		}
-		return shell.AssignIndexedVariable(name, variable, shell.VariableUnknown(name), normalizeIndexedSlots(slots, len(variable.List)))
+		return nil, shell.AssignIndexedVariable(name, variable, shell.VariableUnknown(name), normalizeIndexedSlots(slots, len(variable.List)))
 	case expand.Associative:
 		delete(variable.Map, index)
-		return shell.AssignVariable(name, variable, shell.VariableUnknown(name))
+		return nil, shell.AssignVariable(name, variable, shell.VariableUnknown(name))
 	default:
-		return nil
+		return nil, nil
 	}
 }
 

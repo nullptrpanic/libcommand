@@ -26,7 +26,7 @@ func TestTestTruthTable(t *testing.T) {
 		{[]string{"1", "-le", "1"}, testTrue},
 		{[]string{"2", "-gt", "1"}, testTrue},
 		{[]string{"2", "-ge", "2"}, testTrue},
-		{[]string{"anything", "unsupported", "value"}, testUnknown},
+		{[]string{"first", "-nt", "second"}, testUnknown},
 	} {
 		if got, failure := testTruth(nil, test.args); failure != nil || got != test.want {
 			t.Fatalf("test %#v = %v, %#v; want %v", test.args, got, failure, test.want)
@@ -34,6 +34,9 @@ func TestTestTruthTable(t *testing.T) {
 	}
 	if got, failure := testTruth(nil, []string{"bad", "-eq", "1"}); got != testFalse || failure == nil || failure.exitCode != 2 {
 		t.Fatalf("invalid numeric test = %v, %#v", got, failure)
+	}
+	if _, failure := testTruth(nil, []string{"anything", "unsupported", "value"}); failure == nil || failure.exitCode != 2 {
+		t.Fatalf("invalid binary operator failure = %#v", failure)
 	}
 }
 

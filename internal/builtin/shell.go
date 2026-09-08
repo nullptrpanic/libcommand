@@ -8,10 +8,13 @@ import (
 )
 
 func executeShell(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
-	args, concrete := concreteArguments(invocation)
 	name := invocation.Name
-	if !concrete {
-		return shell.StopUnresolved(fmt.Sprintf("%s script contents depend on unresolved command output", name)), nil
+	args := make([]string, len(invocation.Args))
+	for index, arg := range invocation.Args {
+		args[index] = arg.Value
+	}
+	unknownSource := func() (*runtime.CommandResult, error) {
+		return shell.StopUnresolved(fmt.Sprintf("%s script or options depend on unresolved command output", name)), nil
 	}
 	program := &runtime.ShellProgram{Options: make(map[string]bool)}
 	index := 0
@@ -49,12 +52,18 @@ func executeShell(_ context.Context, shell *runtime.CommandContext, invocation *
 				}
 				stdinSource = true
 			case 'o':
+				if index+1 < len(args) && invocation.Args[index+1].Kind == runtime.ArgumentUnresolved {
+					return unknownSource()
+				}
 				if position+1 != len(argument) || index+1 >= len(args) || !isNamedShellOption(args[index+1]) {
 					return unsupportedShellOption(shell, name, argument)
 				}
 				program.Options[args[index+1]] = enabled
 				index++
 			case 'O':
+				if index+1 < len(args) && invocation.Args[index+1].Kind == runtime.ArgumentUnresolved {
+					return unknownSource()
+				}
 				if position+1 != len(argument) || index+1 >= len(args) || !isShoptOption(args[index+1]) {
 					return unsupportedShellOption(shell, name, argument)
 				}
@@ -77,15 +86,20 @@ func executeShell(_ context.Context, shell *runtime.CommandContext, invocation *
 		if index >= len(args) {
 			return shell.StopUnresolved(fmt.Sprintf("%s requires -c source or a virtual script path", name)), nil
 		}
+		if invocation.Args[index].Kind == runtime.ArgumentUnresolved {
+			return unknownSource()
+		}
 		program.Source = args[index]
 		index++
-		program.Name = name
+		program.Name = shell.Argv0()
 		if index < len(args) {
+			if invocation.Args[index].Kind == runtime.ArgumentUnresolved {
+				return unknownSource()
+			}
 			program.Name = args[index]
 			index++
 		}
-		program.Arguments = append([]string(nil), args[index:]...)
-		return shell.RunShell(program), nil
+		return shell.RunShell(program).WithArguments(invocation.Args[index:]), nil
 	}
 	if stdinSource || index >= len(args) {
 		input, unresolved := shell.Input()
@@ -93,10 +107,12 @@ func executeShell(_ context.Context, shell *runtime.CommandContext, invocation *
 			return nil, nil
 		}
 		program.Source = string(input)
-		program.Name = name
-		program.Arguments = append([]string(nil), args[index:]...)
+		program.Name = shell.Argv0()
 		shell.SetInput(nil, false)
-		return shell.RunShell(program), nil
+		return shell.RunShell(program).WithArguments(invocation.Args[index:]), nil
+	}
+	if invocation.Args[index].Kind == runtime.ArgumentUnresolved {
+		return unknownSource()
 	}
 	program.Name = args[index]
 	filename := shell.ResolvePath(program.Name)
@@ -108,8 +124,7 @@ func executeShell(_ context.Context, shell *runtime.CommandContext, invocation *
 		return shell.StopUnresolved(fmt.Sprintf("%s script contents depend on unresolved command output", name)), nil
 	}
 	program.Source = string(contents)
-	program.Arguments = append([]string(nil), args[index+1:]...)
-	return shell.RunShell(program), nil
+	return shell.RunShell(program).WithArguments(invocation.Args[index+1:]), nil
 }
 
 func unsupportedShellOption(execution *runtime.CommandContext, shell, option string) (*runtime.CommandResult, error) {

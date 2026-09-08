@@ -55,7 +55,7 @@ type testFailure struct {
 }
 
 func testTruth(shell *runtime.CommandContext, args []string) (testTruthValue, *testFailure) {
-	if len(args) > 1 && args[0] == "!" {
+	if len(args) > 1 && len(args) != 3 && args[0] == "!" {
 		value, failure := testTruth(shell, args[1:])
 		return invertTestTruth(value), failure
 	}
@@ -70,22 +70,23 @@ func testTruth(shell *runtime.CommandContext, args []string) (testTruthValue, *t
 			return booleanTestTruth(args[1] != ""), nil
 		case "-z":
 			return booleanTestTruth(args[1] == ""), nil
+		case "-a", "-b", "-g", "-h", "-k", "-L", "-N", "-O", "-G", "-p", "-S", "-t", "-u", "-o", "-v", "-R":
+			// These are valid unary predicates whose state is not modelled.
+			return testUnknown, nil
 		default:
 			if isFileTestOperator(args[0]) {
 				return fileTestTruth(shell, args[0], args[1]), nil
 			}
-			return testUnknown, nil
+			return testFalse, &testFailure{exitCode: 2, message: fmt.Sprintf("%s: unary operator expected", args[0])}
 		}
 	case 3:
-		if args[0] == "!" {
-			value, failure := testTruth(shell, args[1:])
-			return invertTestTruth(value), failure
-		}
 		switch args[1] {
 		case "=", "==":
 			return booleanTestTruth(args[0] == args[2]), nil
 		case "!=":
 			return booleanTestTruth(args[0] != args[2]), nil
+		case "<", ">", "-nt", "-ot", "-ef", "-a", "-o":
+			return testUnknown, nil
 		case "-eq", "-ne", "-lt", "-le", "-gt", "-ge":
 			left, leftErr := strconv.ParseInt(args[0], 10, 64)
 			right, rightErr := strconv.ParseInt(args[2], 10, 64)
@@ -111,6 +112,14 @@ func testTruth(shell *runtime.CommandContext, args []string) (testTruthValue, *t
 				return booleanTestTruth(left >= right), nil
 			}
 		}
+		if args[0] == "!" {
+			value, failure := testTruth(shell, args[1:])
+			return invertTestTruth(value), failure
+		}
+		if args[0] == "(" && args[2] == ")" {
+			return testTruth(shell, args[1:2])
+		}
+		return testFalse, &testFailure{exitCode: 2, message: fmt.Sprintf("%s: binary operator expected", args[1])}
 	}
 	return testUnknown, nil
 }
@@ -137,7 +146,7 @@ func fileTestTruth(shell *runtime.CommandContext, operator, name string) testTru
 	}
 	if kind == runtime.PathFile {
 		switch operator {
-		case "-d", "-x":
+		case "-d", "-x", "-c":
 			return testFalse
 		case "-s":
 			contents, unknown, _ := shell.ReadFile(resolved)

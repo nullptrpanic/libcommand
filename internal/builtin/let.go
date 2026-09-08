@@ -10,11 +10,20 @@ import (
 
 func init() {
 	registerCommand("let", executeLet)
+	definitions["let"].Prepare = func(shell *runtime.CommandContext, invocation *runtime.Invocation) error {
+		clause, ok := shell.CommandSyntax().(*syntax.LetClause)
+		if !ok {
+			return nil
+		}
+		arguments, err := shell.PrepareLetArguments(clause)
+		invocation.Args = arguments
+		return err
+	}
 }
 
 func executeLet(_ context.Context, shell *runtime.CommandContext, invocation *runtime.Invocation) (*runtime.CommandResult, error) {
 	var expressions []syntax.ArithmExpr
-	if clause, ok := shell.CommandSyntax().(*syntax.LetClause); ok {
+	if clause, ok := shell.CommandSyntax().(*syntax.LetClause); ok && invocation.Args == nil {
 		expressions = clause.Exprs
 	} else {
 		args, concrete := concreteArguments(invocation)

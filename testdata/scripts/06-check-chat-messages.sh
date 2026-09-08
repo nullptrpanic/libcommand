@@ -1,0 +1,1 @@
+cd /home/gem/.aily/workdir/feishu_p2p_2f637f71 && lark-cli im +chat-messages-list --as user --chat-id "oc_1c998d15aa01f540a61d5767cbd299eb" --start-time "2026-07-14T13:00:00+08:00" --end-time "2026-07-14T15:10:00+08:00" --page-all 2>hb_zk.err >hb_zk.json; echo "exit=$?"; jq '.data.items | length' hb_zk.json 2>/dev/null || jq '.data | keys' hb_zk.json

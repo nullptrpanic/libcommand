@@ -274,7 +274,7 @@ func TestDirectExecutorErrorPathsAndScopes(t *testing.T) {
 }
 
 func TestControlFlowEdgeBehavior(t *testing.T) {
-	for _, test := range []struct {
+	for _, test := range []*struct {
 		name, script string
 		status       Status
 		calls        []string
@@ -282,7 +282,7 @@ func TestControlFlowEdgeBehavior(t *testing.T) {
 		{"while break", `while true; do cmd first; break; cmd missed; done; cmd after`, StatusCompleted, []string{"cmd", "cmd"}},
 		{"for return exits function", `f() { for x in one two; do cmd "$x"; return 4; done; cmd missed; }; f; cmd after`, StatusCompleted, []string{"cmd", "cmd"}},
 		{"local outside reports shell failure", `local x=value; cmd after`, StatusCompleted, []string{"cmd"}},
-		{"empty expansion is unresolved", `$EMPTY`, StatusUnresolved, []string{}},
+		{"empty expansion completes without invoking a command", `$EMPTY`, StatusCompleted, []string{}},
 		{"unsupported command node is unresolved", `coproc cmd value`, StatusUnresolved, []string{}},
 		{"test invalid regexp fails", `[[ value =~ [ ]]`, StatusCompleted, []string{}},
 	} {

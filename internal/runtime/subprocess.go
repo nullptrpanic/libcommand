@@ -3,14 +3,20 @@ package runtime
 import (
 	"errors"
 	"fmt"
+	"maps"
 
 	"mvdan.cc/sh/v3/syntax"
 )
 
 func (e *ExecutionContext) evaluateBackground(s *State, statement *syntax.Stmt) ([]*pathResult, error) {
+	releaseParent, err := e.retainNestedShellParent(s)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseParent()
 	child := s.clone()
 	clearInheritedExitTrap(child)
-	child.stdin = newCertain[[]byte](nil)
+	child.bindInput(newCertain[[]byte](nil))
 	child.resetOutput()
 	foreground := *statement
 	foreground.Background = false
@@ -34,7 +40,7 @@ func (e *ExecutionContext) evaluateBackground(s *State, statement *syntax.Stmt) 
 		status := childPath.status
 		stdout, stdoutUnresolved := childPath.state.stdout.Data()
 		stderr, stderrUnresolved := childPath.state.stderr.Data()
-		if outputStatus := e.appendStreams(parent, stdout, stderr, stdoutUnresolved, stderrUnresolved, sourceLocation(statement)); outputStatus != StatusCompleted {
+		if outputStatus := e.appendCapturedStreams(parent, stdout, stderr, stdoutUnresolved, stderrUnresolved, sourceLocation(statement)); outputStatus != StatusCompleted {
 			status = outputStatus
 		}
 		if status == StatusCompleted {
@@ -66,6 +72,11 @@ func (e *ExecutionContext) backgroundLoopBudgetExhausted() bool {
 }
 
 func (e *ExecutionContext) evaluateSubshell(s *State, subshell *syntax.Subshell) ([]*pathResult, error) {
+	releaseParent, err := e.retainNestedShellParent(s)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseParent()
 	child := s.clone()
 	clearInheritedExitTrap(child)
 	if !child.options.errTrace {
@@ -87,7 +98,7 @@ func (e *ExecutionContext) evaluateSubshell(s *State, subshell *syntax.Subshell)
 		status := childPath.status
 		stdout, stdoutUnresolved := childPath.state.stdout.Data()
 		stderr, stderrUnresolved := childPath.state.stderr.Data()
-		if outputStatus := e.appendStreams(parent, stdout, stderr, stdoutUnresolved, stderrUnresolved, sourceLocation(subshell)); outputStatus != StatusCompleted {
+		if outputStatus := e.appendCapturedStreams(parent, stdout, stderr, stdoutUnresolved, stderrUnresolved, sourceLocation(subshell)); outputStatus != StatusCompleted {
 			status = outputStatus
 		}
 		exitCode, exitUnresolved := childPath.state.exitStatus.Data()
@@ -119,6 +130,11 @@ func (e *ExecutionContext) evaluateSubstitutionPaths(s *State, substitution *syn
 		return []*pathResult{{state: s, status: StatusCompleted}}, nil
 	}
 
+	releaseParent, err := e.retainNestedShellParent(s)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseParent()
 	child := s.clone()
 	clearInheritedExitTrap(child)
 	if !child.options.inheritErrexit {
@@ -131,6 +147,7 @@ func (e *ExecutionContext) evaluateSubstitutionPaths(s *State, substitution *syn
 		return []*pathResult{{state: child, status: status}}, nil
 	}
 	child.resetOutput()
+	child.captureDescriptor(1)
 	childPaths, err := e.evaluateStatements([]*pathResult{{state: child, status: StatusCompleted}}, substitution.Stmts)
 	childPaths, trapErr := e.evaluateExitTraps(childPaths)
 	if err == nil {
@@ -141,7 +158,7 @@ func (e *ExecutionContext) evaluateSubstitutionPaths(s *State, substitution *syn
 		parent := substitutionParent(s, childPath.state)
 		status := childPath.status
 		stderr, stderrUnresolved := childPath.state.stderr.Data()
-		if outputStatus := e.appendStreams(parent, nil, stderr, false, stderrUnresolved, sourceLocation(substitution)); outputStatus != StatusCompleted {
+		if outputStatus := e.appendCapturedStreams(parent, nil, stderr, false, stderrUnresolved, sourceLocation(substitution)); outputStatus != StatusCompleted {
 			status = outputStatus
 		}
 		if status != StatusCompleted {
@@ -182,5 +199,23 @@ func mergeIssue(parent, child *State) {
 }
 
 func mergeChildInput(parent, child *State) {
-	parent.stdin = child.stdin
+	parentInput, childInput := parent.descriptors[0], child.descriptors[0]
+	if parentInput == nil && childInput == nil || parentInput != nil && childInput != nil && parentInput.key == childInput.key {
+		parent.stdin = child.stdin
+	}
+	inputs := make(map[*byte]*uncertain[[]byte])
+	for _, descriptor := range child.descriptors {
+		if descriptor.input != nil {
+			inputs[descriptor.key] = descriptor.input
+		}
+	}
+	updated := maps.Clone(parent.descriptors)
+	for fd, descriptor := range updated {
+		if input, exists := inputs[descriptor.key]; exists && descriptor.input != input {
+			copy := *descriptor
+			copy.input = input
+			updated[fd] = &copy
+		}
+	}
+	parent.setDescriptors(updated)
 }

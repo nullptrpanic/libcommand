@@ -3,7 +3,6 @@ package runtime
 import (
 	"fmt"
 
-	"github.com/nullptrpanic/libcommand/internal/materialize"
 	"mvdan.cc/sh/v3/expand"
 )
 
@@ -19,7 +18,7 @@ type ShellProgram struct {
 
 // Invoke dispatches a command without consulting shell functions. When
 // builtinOnly is true, the selected exact definition must be a shell builtin.
-func (c *CommandContext) executeInvoke(name string, arguments []*Argument, builtinOnly bool) ([]*pathResult, error) {
+func (c *CommandContext) executeInvoke(name string, arguments []*Argument, builtinOnly bool, argv0 *string) ([]*pathResult, error) {
 	definition := c.execution.lookupCommandDefinition(name)
 	if !commandDefinitionExecutable(definition) || definition.Fallback && builtinOnly || builtinOnly && !definition.Builtin {
 		if builtinOnly {
@@ -30,19 +29,8 @@ func (c *CommandContext) executeInvoke(name string, arguments []*Argument, built
 		}
 		return c.applyResult(nil)
 	}
-	input, _ := c.state.stdin.Data()
-	invocation, status, err := c.execution.commandInvocation(
-		c.state,
-		name,
-		arguments,
-		input,
-		c.source,
-		definition.Builtin && !definition.UserOverride,
-	)
-	if err != nil || status != StatusCompleted {
-		return []*pathResult{{state: c.state, status: status}}, err
-	}
-	return c.execution.invokeCommand(c.state, c.source, nil, definition.Command, invocation)
+	invocation := &Invocation{Name: name, Args: arguments}
+	return c.execution.invokeCommand(c.state, c.source, nil, definition, invocation, argv0, c.redirectionScope)
 }
 
 // InvokeExternal dispatches only non-builtin definitions, as env does.
@@ -51,7 +39,7 @@ func (c *CommandContext) executeInvokeExternal(name string, arguments []*Argumen
 	if !commandDefinitionExecutable(definition) || definition.Builtin && !definition.UserOverride {
 		return c.applyResult(nil)
 	}
-	return c.executeInvoke(name, arguments, false)
+	return c.executeInvoke(name, arguments, false, nil)
 }
 
 // InvokeWithEnvironment invokes a command with temporary exported variable
@@ -96,7 +84,7 @@ func saveEnvironmentVariable(state *State, saved map[string]*savedVariable, name
 }
 
 // Replace invokes a command and terminates each successful path as exec does.
-func (c *CommandContext) executeReplace(name string, arguments []*Argument, clearEnvironment bool) ([]*pathResult, error) {
+func (c *CommandContext) executeReplace(name string, arguments []*Argument, clearEnvironment bool, argv0 *string) ([]*pathResult, error) {
 	state := c.state
 	failure := state.clone()
 	if clearEnvironment {
@@ -104,7 +92,7 @@ func (c *CommandContext) executeReplace(name string, arguments []*Argument, clea
 	}
 	definition := c.execution.lookupCommandDefinition(name)
 	unknownExternal := !commandDefinitionExecutable(definition) || definition.Fallback && !definition.Builtin
-	paths, err := c.executeInvoke(name, arguments, false)
+	paths, err := c.executeInvoke(name, arguments, false, argv0)
 	if err != nil {
 		return paths, err
 	}
@@ -140,7 +128,7 @@ func (c *CommandContext) executeEvaluate(source, name string, parseExitCode int)
 
 // Source evaluates source in source-file scope and restores positional
 // arguments after every resulting path.
-func (c *CommandContext) executeSource(source, name string, arguments []string) ([]*pathResult, error) {
+func (c *CommandContext) executeSource(source, name string, arguments []*Argument) ([]*pathResult, error) {
 	state := c.state
 	if status := c.execution.checkContext(state, c.source); status != StatusCompleted {
 		return []*pathResult{{state: state, status: status}}, nil
@@ -165,7 +153,7 @@ func (c *CommandContext) executeSource(source, name string, arguments []string) 
 }
 
 // RunShell executes a parsed child-shell program in an isolated shell state.
-func (c *CommandContext) executeRunShell(program *ShellProgram) ([]*pathResult, error) {
+func (c *CommandContext) executeRunShell(program *ShellProgram, arguments []*Argument) ([]*pathResult, error) {
 	parent := c.state
 	releaseParent, err := c.execution.retainNestedShellParent(parent)
 	if err != nil {
@@ -179,7 +167,7 @@ func (c *CommandContext) executeRunShell(program *ShellProgram) ([]*pathResult, 
 		}
 	}
 	child.vars.put("0", expand.Variable{Set: true, Kind: expand.String, Str: program.Name})
-	child.replacePositionalArguments(program.Arguments)
+	child.replaceTypedPositionalArguments(arguments)
 	if status := c.execution.checkContext(child, c.source); status != StatusCompleted {
 		mergeIssue(parent, child)
 		return []*pathResult{{state: parent, status: status}}, nil
@@ -216,7 +204,7 @@ func (c *CommandContext) shellChildResults(parent *State, childPaths []*pathResu
 		status := childPath.status
 		stdout, stdoutUnresolved := childPath.state.stdout.Data()
 		stderr, stderrUnresolved := childPath.state.stderr.Data()
-		if outputStatus := c.execution.appendStreams(result, stdout, stderr, stdoutUnresolved, stderrUnresolved, c.source); outputStatus != StatusCompleted {
+		if outputStatus := c.execution.appendCapturedStreams(result, stdout, stderr, stdoutUnresolved, stderrUnresolved, c.source); outputStatus != StatusCompleted {
 			status = outputStatus
 		}
 		exitCode, exitUnresolved := childPath.state.exitStatus.Data()
@@ -224,31 +212,4 @@ func (c *CommandContext) shellChildResults(parent *State, childPaths []*pathResu
 		paths = append(paths, &pathResult{state: result, status: status})
 	}
 	return paths, evaluationErr
-}
-
-func (e *ExecutionContext) retainNestedShellParent(parent *State) (func(), error) {
-	maximum := normalizedMaxMemoryBytes(e.config.MaxMemoryBytes)
-	parentBytes, ok := stateMaterialization(parent)
-	if ok {
-		parentBytes, ok = materialize.Add(parentBytes, materialize.EntryBytes, maximum)
-	}
-	auxiliary := 0
-	if ok {
-		auxiliary, ok = e.retainedAuxiliaryBytes(maximum)
-	}
-	if ok {
-		_, ok = materialize.Add(auxiliary, parentBytes, maximum)
-	}
-	nestedBytes := 0
-	if ok {
-		nestedBytes, ok = materialize.Add(e.nestedShellBytes, parentBytes, maximum)
-	}
-	if !ok {
-		return nil, materialize.LimitError(maximum)
-	}
-	previous := e.nestedShellBytes
-	e.nestedShellBytes = nestedBytes
-	return func() {
-		e.nestedShellBytes = previous
-	}, nil
 }
