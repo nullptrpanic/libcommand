@@ -1,26 +1,25 @@
 import {
-  argumentPresentation,
   buildFlowModel,
   buildFlowModels,
-  commandResultUnresolved,
-  concreteDisplayValue,
   createASTFlowModel,
   createRuntimeFlowModel,
+} from "./model.js";
+import {
+  argumentPresentation,
+  commandResultUnresolved,
+  concreteDisplayValue,
   executionOccurrenceLabel,
-  flowEdgePath,
-  flowScrollTarget,
   formatBytes,
-  layoutASTFlowGraph,
-  layoutFlowGraph,
   liveControlView,
   nodeOutput,
   normalizeCommands,
   parseArguments,
   parseEnvironment,
   startupMode,
-  tokenizeBash,
   visibleResultFields,
-} from "./model.js";
+} from "./presentation.js";
+import { flowEdgePath, flowScrollTarget, layoutASTFlowGraph, layoutFlowGraph } from "./layout.js";
+import { tokenizeBash } from "./highlight.js";
 
 const maximumRenderedNodes = 500;
 const maximumHighlightedCharacters = 256 << 10;

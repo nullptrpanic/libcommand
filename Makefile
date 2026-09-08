@@ -28,7 +28,7 @@ playground:
 	mkdir -p -- "$$stage" "$(PLAYGROUND_TARGET_DIR)"; \
 	GOOS=js GOARCH=wasm go build -o "$$stage/libcommand.wasm" ./cmd/playground-wasm; \
 	cp "$$(go env GOROOT)/lib/wasm/wasm_exec.js" "$$stage/wasm_exec.js"; \
-	cp playground/index.html playground/styles.css playground/model.js playground/handler.js playground/app.js playground/worker.js "$$stage/"; \
+	cp playground/index.html playground/styles.css playground/*.js "$$stage/"; \
 	go build -tags=playground_assets -trimpath -ldflags='-s -w' -o "$(PLAYGROUND_TARGET)" ./cmd/playground; \
 	printf 'playground binary built at %s\n' "$(PLAYGROUND_TARGET)"
 
