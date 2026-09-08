@@ -363,7 +363,7 @@ export function createASTFlowModel(initialDefinitions = []) {
       }
 
       case "path_forked": {
-        const parentPath = event.parentPathId || event.pathId;
+        const parentPath = event.pathId;
         const node = visibleSyntaxNode(event.nodeId) || nodeByDefinitionID.get(lastByPath.get(parentPath));
         if (node) {
           node.forked = true;
@@ -761,7 +761,7 @@ export function createRuntimeFlowModel(nodes = []) {
       }
 
       case "path_forked": {
-        const parentPath = event.parentPathId || event.pathId;
+        const parentPath = event.pathId;
         const previous = lastByPath.get(parentPath);
         if (previous && nodeByID.has(previous)) {
           const parent = nodeByID.get(previous);

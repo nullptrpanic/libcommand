@@ -1,0 +1,600 @@
+{
+  "source": "if missing; then echo outer-yes; if other; then echo nested-yes; else echo nested-no; fi; else echo outer-no; fi; echo done",
+  "nodes": [
+    {
+      "id": 1,
+      "kind": "condition",
+      "snippet": "if missing; then echo outer-yes; if other; then echo nested-yes; else echo nested-no; fi; else echo outer-no; fi;",
+      "source": {
+        "name": "command.sh",
+        "line": 1,
+        "column": 1,
+        "endLine": 1,
+        "endColumn": 114
+      }
+    },
+    {
+      "id": 2,
+      "parentId": 1,
+      "kind": "command",
+      "snippet": "missing;",
+      "source": {
+        "name": "command.sh",
+        "line": 1,
+        "column": 4,
+        "endLine": 1,
+        "endColumn": 12
+      },
+      "embedded": true,
+      "flowCommand": "missing"
+    },
+    {
+      "id": 3,
+      "parentId": 1,
+      "kind": "command",
+      "snippet": "echo outer-yes;",
+      "source": {
+        "name": "command.sh",
+        "line": 1,
+        "column": 18,
+        "endLine": 1,
+        "endColumn": 33
+      },
+      "flowCommand": "echo"
+    },
+    {
+      "id": 4,
+      "parentId": 1,
+      "kind": "condition",
+      "snippet": "if other; then echo nested-yes; else echo nested-no; fi;",
+      "source": {
+        "name": "command.sh",
+        "line": 1,
+        "column": 34,
+        "endLine": 1,
+        "endColumn": 90
+      }
+    },
+    {
+      "id": 5,
+      "parentId": 4,
+      "kind": "command",
+      "snippet": "other;",
+      "source": {
+        "name": "command.sh",
+        "line": 1,
+        "column": 37,
+        "endLine": 1,
+        "endColumn": 43
+      },
+      "embedded": true,
+      "flowCommand": "other"
+    },
+    {
+      "id": 6,
+      "parentId": 4,
+      "kind": "command",
+      "snippet": "echo nested-yes;",
+      "source": {
+        "name": "command.sh",
+        "line": 1,
+        "column": 49,
+        "endLine": 1,
+        "endColumn": 65
+      },
+      "flowCommand": "echo"
+    },
+    {
+      "id": 7,
+      "parentId": 4,
+      "kind": "command",
+      "snippet": "echo nested-no;",
+      "source": {
+        "name": "command.sh",
+        "line": 1,
+        "column": 71,
+        "endLine": 1,
+        "endColumn": 86
+      },
+      "flowGroup": 1,
+      "flowCommand": "echo"
+    },
+    {
+      "id": 8,
+      "parentId": 1,
+      "kind": "command",
+      "snippet": "echo outer-no;",
+      "source": {
+        "name": "command.sh",
+        "line": 1,
+        "column": 96,
+        "endLine": 1,
+        "endColumn": 110
+      },
+      "flowGroup": 1,
+      "flowCommand": "echo"
+    },
+    {
+      "id": 9,
+      "kind": "command",
+      "snippet": "echo done",
+      "source": {
+        "name": "command.sh",
+        "line": 1,
+        "column": 115,
+        "endLine": 1,
+        "endColumn": 124
+      },
+      "flowCommand": "echo"
+    }
+  ],
+  "events": [
+    {
+      "sequence": 1,
+      "kind": "simulation_started",
+      "status": 0
+    },
+    {
+      "sequence": 11,
+      "kind": "statement_started",
+      "nodeId": 1,
+      "pathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 12,
+      "kind": "statement_started",
+      "nodeId": 2,
+      "pathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 13,
+      "kind": "command_started",
+      "nodeId": 2,
+      "pathId": 1,
+      "invocation": {
+        "name": "missing",
+        "args": null
+      },
+      "status": 0
+    },
+    {
+      "sequence": 14,
+      "kind": "command_finished",
+      "nodeId": 2,
+      "pathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 15,
+      "kind": "statement_finished",
+      "nodeId": 2,
+      "pathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 16,
+      "kind": "path_forked",
+      "nodeId": 2,
+      "pathId": 1,
+      "childPathIds": [
+        2,
+        3
+      ],
+      "status": 0
+    },
+    {
+      "sequence": 17,
+      "kind": "statement_started",
+      "nodeId": 3,
+      "pathId": 2,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 18,
+      "kind": "command_started",
+      "nodeId": 3,
+      "pathId": 2,
+      "parentPathId": 1,
+      "invocation": {
+        "name": "echo",
+        "args": [
+          {
+            "kind": 0,
+            "value": "outer-yes"
+          }
+        ]
+      },
+      "status": 0
+    },
+    {
+      "sequence": 19,
+      "kind": "command_finished",
+      "nodeId": 3,
+      "pathId": 2,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 20,
+      "kind": "statement_finished",
+      "nodeId": 3,
+      "pathId": 2,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 21,
+      "kind": "statement_started",
+      "nodeId": 4,
+      "pathId": 2,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 22,
+      "kind": "statement_started",
+      "nodeId": 5,
+      "pathId": 2,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 23,
+      "kind": "command_started",
+      "nodeId": 5,
+      "pathId": 2,
+      "parentPathId": 1,
+      "invocation": {
+        "name": "other",
+        "args": null
+      },
+      "status": 0
+    },
+    {
+      "sequence": 24,
+      "kind": "command_finished",
+      "nodeId": 5,
+      "pathId": 2,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 25,
+      "kind": "statement_finished",
+      "nodeId": 5,
+      "pathId": 2,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 26,
+      "kind": "path_forked",
+      "nodeId": 5,
+      "pathId": 2,
+      "parentPathId": 1,
+      "childPathIds": [
+        4,
+        5
+      ],
+      "status": 0
+    },
+    {
+      "sequence": 27,
+      "kind": "statement_started",
+      "nodeId": 6,
+      "pathId": 4,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 28,
+      "kind": "command_started",
+      "nodeId": 6,
+      "pathId": 4,
+      "parentPathId": 2,
+      "invocation": {
+        "name": "echo",
+        "args": [
+          {
+            "kind": 0,
+            "value": "nested-yes"
+          }
+        ]
+      },
+      "status": 0
+    },
+    {
+      "sequence": 29,
+      "kind": "command_finished",
+      "nodeId": 6,
+      "pathId": 4,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 30,
+      "kind": "statement_finished",
+      "nodeId": 6,
+      "pathId": 4,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 31,
+      "kind": "statement_started",
+      "nodeId": 7,
+      "pathId": 5,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 32,
+      "kind": "command_started",
+      "nodeId": 7,
+      "pathId": 5,
+      "parentPathId": 2,
+      "invocation": {
+        "name": "echo",
+        "args": [
+          {
+            "kind": 0,
+            "value": "nested-no"
+          }
+        ]
+      },
+      "status": 0
+    },
+    {
+      "sequence": 33,
+      "kind": "command_finished",
+      "nodeId": 7,
+      "pathId": 5,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 34,
+      "kind": "statement_finished",
+      "nodeId": 7,
+      "pathId": 5,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 35,
+      "kind": "statement_finished",
+      "nodeId": 4,
+      "pathId": 4,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 36,
+      "kind": "statement_finished",
+      "nodeId": 4,
+      "pathId": 5,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 37,
+      "kind": "statement_started",
+      "nodeId": 8,
+      "pathId": 3,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 38,
+      "kind": "command_started",
+      "nodeId": 8,
+      "pathId": 3,
+      "parentPathId": 1,
+      "invocation": {
+        "name": "echo",
+        "args": [
+          {
+            "kind": 0,
+            "value": "outer-no"
+          }
+        ]
+      },
+      "status": 0
+    },
+    {
+      "sequence": 39,
+      "kind": "command_finished",
+      "nodeId": 8,
+      "pathId": 3,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 40,
+      "kind": "statement_finished",
+      "nodeId": 8,
+      "pathId": 3,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 41,
+      "kind": "statement_finished",
+      "nodeId": 1,
+      "pathId": 4,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 42,
+      "kind": "statement_finished",
+      "nodeId": 1,
+      "pathId": 5,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 43,
+      "kind": "statement_finished",
+      "nodeId": 1,
+      "pathId": 3,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 44,
+      "kind": "statement_started",
+      "nodeId": 9,
+      "pathId": 4,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 45,
+      "kind": "command_started",
+      "nodeId": 9,
+      "pathId": 4,
+      "parentPathId": 2,
+      "invocation": {
+        "name": "echo",
+        "args": [
+          {
+            "kind": 0,
+            "value": "done"
+          }
+        ]
+      },
+      "status": 0
+    },
+    {
+      "sequence": 46,
+      "kind": "command_finished",
+      "nodeId": 9,
+      "pathId": 4,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 47,
+      "kind": "statement_finished",
+      "nodeId": 9,
+      "pathId": 4,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 48,
+      "kind": "statement_started",
+      "nodeId": 9,
+      "pathId": 5,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 49,
+      "kind": "command_started",
+      "nodeId": 9,
+      "pathId": 5,
+      "parentPathId": 2,
+      "invocation": {
+        "name": "echo",
+        "args": [
+          {
+            "kind": 0,
+            "value": "done"
+          }
+        ]
+      },
+      "status": 0
+    },
+    {
+      "sequence": 50,
+      "kind": "command_finished",
+      "nodeId": 9,
+      "pathId": 5,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 51,
+      "kind": "statement_finished",
+      "nodeId": 9,
+      "pathId": 5,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 52,
+      "kind": "statement_started",
+      "nodeId": 9,
+      "pathId": 3,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 53,
+      "kind": "command_started",
+      "nodeId": 9,
+      "pathId": 3,
+      "parentPathId": 1,
+      "invocation": {
+        "name": "echo",
+        "args": [
+          {
+            "kind": 0,
+            "value": "done"
+          }
+        ]
+      },
+      "status": 0
+    },
+    {
+      "sequence": 54,
+      "kind": "command_finished",
+      "nodeId": 9,
+      "pathId": 3,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 55,
+      "kind": "statement_finished",
+      "nodeId": 9,
+      "pathId": 3,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 56,
+      "kind": "path_completed",
+      "nodeId": 9,
+      "pathId": 4,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 57,
+      "kind": "path_completed",
+      "nodeId": 9,
+      "pathId": 5,
+      "parentPathId": 2,
+      "status": 0
+    },
+    {
+      "sequence": 58,
+      "kind": "path_completed",
+      "nodeId": 9,
+      "pathId": 3,
+      "parentPathId": 1,
+      "status": 0
+    },
+    {
+      "sequence": 59,
+      "kind": "simulation_finished",
+      "status": 0
+    }
+  ]
+}

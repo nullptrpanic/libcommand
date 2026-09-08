@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import * as playgroundModel from "./model.js";
 
 import {
@@ -138,6 +139,29 @@ test("runtime flow keeps forked command occurrences distinct and aligns alternat
   const right = layout.positions.get("runtime:7");
   assert.equal(left.y, right.y);
   assert.notEqual(left.x, right.x);
+});
+
+test("nested forks inherit the currently forking path in a real Go trace", () => {
+  // Captured from SimulateTrace for fixture.source; snapshots and payloads
+  // unrelated to path topology were omitted, not replaced by synthetic IDs.
+  const fixture = JSON.parse(readFileSync(new URL("../testdata/traces/nested-fork.json", import.meta.url), "utf8"));
+  const forks = fixture.events.filter((event) => event.kind === "path_forked");
+  assert.deepEqual(forks.map((event) => [event.pathId, event.parentPathId || 0, event.childPathIds]), [
+    [1, 0, [2, 3]], [2, 1, [4, 5]],
+  ]);
+  const models = buildFlowModels(fixture);
+  const commands = models.runtime.nodes;
+  const other = commands.find((node) => node.invocation.name === "other");
+  for (const name of ["nested-yes", "nested-no"]) {
+    const branch = commands.find((node) => node.invocation.args?.[0]?.value === name);
+    const incoming = models.runtime.edges.filter((edge) => edge.to === branch.id);
+    assert.deepEqual(incoming.map((edge) => edge.from), [other.id]);
+  }
+  const astOther = models.ast.nodes.find((node) => node.nodeID === 4);
+  assert.deepEqual(astOther.childPathIDs, [4, 5]);
+  for (const child of [6, 7]) {
+    assert.ok(models.ast.edges.some((edge) => edge.from === astOther.id && edge.to === `ast:${child}` && edge.state !== "skipped" && edge.sequence > 0));
+  }
 });
 
 test("runtime flow omits shell control events and keeps command execution order", () => {
